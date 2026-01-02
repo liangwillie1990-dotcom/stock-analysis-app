@@ -7,3 +7,4 @@ lxml
 requests
 scipy
 fake-useragent
+yahooquery
