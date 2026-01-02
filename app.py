@@ -1,9 +1,11 @@
 """
-Willie's Omega V17.1 - The Ultimate Quant System (Robust Edition)
+Willie's Omega V17.2 - The Ultimate Quant System (Stable Edition)
 Author: Gemini AI
 Description:
-    Fixes KeyError issues when screener returns empty results.
-    Includes full V17 features:
+    Fixed 'use_container_width' deprecation error causing infinite loading.
+    Added try-catch blocks to prevent UI freezing.
+    
+    Features:
     1. QuantBrain XAI (Thesis Generation)
     2. Monte Carlo Simulation (Scipy)
     3. Technical Pattern Recognition (Ichimoku, ATR, OBV)
@@ -33,7 +35,7 @@ from scipy.stats import norm
 # 0. 全局設定與 CSS 視覺系統
 # ==========================================
 st.set_page_config(
-    page_title="Willie's Omega V17.1",
+    page_title="Willie's Omega V17.2",
     layout="wide",
     page_icon="🌌",
     initial_sidebar_state="expanded"
@@ -44,7 +46,6 @@ st.markdown("""
     :root { --primary: #00d4ff; --bull: #00fa9a; --bear: #ff4d4d; --bg: #0e1117; --card: #1a1c24; }
     .stApp { font-family: 'Roboto Mono', 'Microsoft JhengHei', monospace; background-color: var(--bg); }
     
-    /* 數據卡片 */
     div[data-testid="stMetric"] {
         background: rgba(26, 28, 36, 0.8);
         backdrop-filter: blur(10px);
@@ -56,19 +57,16 @@ st.markdown("""
     }
     div[data-testid="stMetric"]:hover { transform: translateY(-3px); border-color: var(--primary); }
     
-    /* 標籤頁 */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background-color: #111; padding: 10px; border-radius: 10px; border: 1px solid #333; }
     .stTabs [data-baseweb="tab"] { height: 40px; border-radius: 6px; color: #a0a0a0; border: none; font-weight: 600; }
     .stTabs [aria-selected="true"] { background-color: #333; color: var(--primary); }
     
-    /* 按鈕 */
     .stButton>button {
         background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
         color: white; border: none; font-weight: bold; letter-spacing: 1px; transition: all 0.3s;
     }
     .stButton>button:hover { box-shadow: 0 0 15px rgba(37, 99, 235, 0.6); transform: scale(1.02); }
     
-    /* 表格 */
     div[data-testid="stDataFrame"] { border: 1px solid #333; border-radius: 8px; }
     div[data-testid="stDataFrame"] div[role="gridcell"] { white-space: normal !important; }
 </style>
@@ -96,7 +94,6 @@ class DBManager:
 
     @staticmethod
     def _seed_universe():
-        """V16 的擴充名單 (300+ 檔)"""
         universe = {
             "list_tech": "2330,2454,2303,3034,3035,2379,3443,3661,3529,4961,3006,3227,8016,8299,6415,6531,6756,2408,2449,6223,6533,8081,2317,2382,3231,2357,6669,2356,2301,3017,2324,2421,2376,2377,3013,3515,6214,8112,8210,3037,2345,4938",
             "list_finance": "2881,2882,2891,2886,2892,2884,2890,5880,2885,2880,2883,2887,2801,2809,2812,2834,2838,2845,2849,2850,2851,2855,2867,5876,5871",
@@ -199,43 +196,36 @@ DBManager.init_db()
 # ==========================================
 
 class TechnicalEngine:
-    """V15.1 的完整技術指標引擎"""
     @staticmethod
     def calculate_all(df):
         if df.empty: return df
         df = df.copy()
         
-        # MA
         for ma in [5, 10, 20, 60, 120, 240]:
             df[f'MA{ma}'] = df['Close'].rolling(ma).mean()
             
-        # KD
         low_min = df['Low'].rolling(9).min()
         high_max = df['High'].rolling(9).max()
         df['RSV'] = (df['Close'] - low_min) / (high_max - low_min) * 100
         df['K'] = df['RSV'].ewm(com=2).mean()
         df['D'] = df['K'].ewm(com=2).mean()
         
-        # MACD
         df['MACD'] = df['Close'].ewm(span=12).mean() - df['Close'].ewm(span=26).mean()
         df['Signal'] = df['MACD'].ewm(span=9).mean()
         df['Hist'] = df['MACD'] - df['Signal']
         
-        # RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta>0, 0)).rolling(14).mean()
         loss = (-delta.where(delta<0, 0)).rolling(14).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
         
-        # BB
         df['BB_Mid'] = df['MA20']
         df['BB_Std'] = df['Close'].rolling(20).std()
         df['BB_Up'] = df['BB_Mid'] + (df['BB_Std'] * 2)
         df['BB_Low'] = df['BB_Mid'] - (df['BB_Std'] * 2)
         df['BB_Width'] = (df['BB_Up'] - df['BB_Low']) / df['BB_Mid']
         
-        # ATR & OBV (V15.1 特色)
         high_low = df['High'] - df['Low']
         high_close = np.abs(df['High'] - df['Close'].shift())
         low_close = np.abs(df['Low'] - df['Close'].shift())
@@ -243,7 +233,6 @@ class TechnicalEngine:
         df['ATR'] = ranges.max(axis=1).rolling(14).mean()
         df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
         
-        # Ichimoku (一目均衡表)
         high_9 = df['High'].rolling(9).max()
         low_9 = df['Low'].rolling(9).min()
         df['Tenkan'] = (high_9 + low_9) / 2
@@ -254,7 +243,6 @@ class TechnicalEngine:
         return df
 
 class RiskEngine:
-    """V15.1 的風險與模擬引擎 (使用 scipy)"""
     @staticmethod
     def calculate_metrics(df):
         if len(df) < 30: return {"sharpe":0, "volatility":0, "max_dd":0}
@@ -283,21 +271,14 @@ class RiskEngine:
         return {"mean": np.mean(final), "p95": np.percentile(final, 95), "p05": np.percentile(final, 5), "win_rate": win_rate, "paths": paths[:, :50]}
 
 class QuantBrain:
-    """V16.0 的白箱 AI 引擎 (XAI)"""
     @staticmethod
     def analyze(ticker, hist, info, price):
         if hist.empty: return None
-        # 取最新技術指標
         curr = hist.iloc[-1]
-        prev = hist.iloc[-2]
         
-        # 乖離率
         bias = (price - curr['MA20']) / curr['MA20'] * 100
-        
-        # 爆量
         vol_ratio = curr['Volume'] / hist['Volume'].rolling(5).mean().iloc[-2]
         
-        # 基本面
         eps = info.get('trailingEps') or info.get('forwardEps')
         pe = price / eps if eps and eps > 0 else 999
         pb = info.get('priceToBook', 0)
@@ -319,20 +300,17 @@ class QuantBrain:
         if strategy == "value": w_v = 2.0; w_t = 0.5
         elif strategy == "growth": w_t = 2.0; w_v = 0.5
         
-        # Trend
         if f['price'] > f['ma20']: score += 5 * w_t
         if f['price'] > f['ma60']: score += 5 * w_t
         if f['macd'] > f['sig']: score += 5 * w_t
         if f['k'] > f['d'] and f['k'] < 80: score += 3 * w_t
         if f['vol_ratio'] > 1.5: score += 5
         
-        # Value
         if f['pe'] < 15: score += 5 * w_v
         if f['pe'] > 40: score -= 5 * w_v
         if f['roe'] > 0.15: score += 10 * w_v
         if f['yield'] > 4: score += 5 * w_v
         
-        # Risk
         if f['bias'] > 20: score -= 10
         if f['rsi'] > 85: score -= 5
         
@@ -340,7 +318,6 @@ class QuantBrain:
 
     @staticmethod
     def explain(f, score):
-        """產生 V16 的投資論述"""
         if not f: return "N/A"
         pros, cons = [], []
         
@@ -366,7 +343,6 @@ class QuantBrain:
         return thesis
 
 class BacktestEngine:
-    """V15.1 的回測引擎 (保留！不要刪！)"""
     @staticmethod
     def run(df, strategy="kd", capital=500000):
         cash = capital
@@ -423,7 +399,6 @@ class DataFetcher:
             hist = stock.history(period="2y")
             if hist.empty: return None
             
-            # Twstock 補價
             if ticker[:2].isdigit():
                 try:
                     real = twstock.realtime.get(ticker.replace(".TW", ""))
@@ -436,7 +411,6 @@ class DataFetcher:
                 data['price'] = hist['Close'].iloc[-1]
                 data['name'] = stock.info.get('longName', ticker)
 
-            # 執行所有引擎
             hist = TechnicalEngine.calculate_all(hist)
             risk = RiskEngine.calculate_metrics(hist)
             mc = RiskEngine.monte_carlo(hist)
@@ -445,7 +419,6 @@ class DataFetcher:
             score = QuantBrain.score(factors)
             thesis = QuantBrain.explain(factors, score)
             
-            # 估值
             eps = factors['eps']
             valuation = {}
             if eps:
@@ -465,7 +438,6 @@ class DataFetcher:
 
     @staticmethod
     def fetch_simple(ticker):
-        """儀表板專用極速模式"""
         ticker = DataFetcher.normalize(ticker)
         try:
             stock = yf.Ticker(ticker)
@@ -513,7 +485,6 @@ start_bg()
 # 5. UI 視覺化組件
 # ==========================================
 def plot_radar(d):
-    """V15.1 的雷達圖"""
     f = d['factors']
     risk_s = max(0, 100 - d['risk']['volatility']*200)
     val_s = 80 if f['pe'] < 15 else 40
@@ -531,28 +502,23 @@ def plot_radar(d):
     st.plotly_chart(fig, use_container_width=True)
 
 def plot_pro_chart(d):
-    """V15.1 的專業 K 線圖"""
     df = pd.read_json(d['hist_json'])
     if 'Date' in df.columns: df['Date'] = pd.to_datetime(df['Date']); df.set_index('Date', inplace=True)
     elif 'index' in df.columns: df['index'] = pd.to_datetime(df['index']); df.set_index('index', inplace=True)
     
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
     
-    # Main
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='#ffa726'), name='月線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='#29b6f6'), name='季線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Up'], line=dict(width=0), showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], fill='tonexty', fillcolor='rgba(255,255,255,0.05)', line=dict(width=0)), row=1, col=1)
-    # Ichimoku Cloud (V15.1 Feature)
     fig.add_trace(go.Scatter(x=df.index, y=df['Tenkan'], line=dict(color='cyan', width=1, dash='dot'), name='轉折'), row=1, col=1)
     
-    # MACD
     cols = ['#ff5252' if v > 0 else '#69f0ae' for v in df['Hist']]
     fig.add_trace(go.Bar(x=df.index, y=df['Hist'], marker_color=cols), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='yellow')), row=2, col=1)
     
-    # KD
     fig.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#ffa726')), row=3, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#ab47bc')), row=3, col=1)
     
@@ -560,7 +526,6 @@ def plot_pro_chart(d):
     st.plotly_chart(fig, use_container_width=True)
 
 def plot_monte_carlo(d):
-    """V15.1 的蒙地卡羅"""
     mc = d['monte_carlo']
     paths = mc['paths']
     fig = go.Figure()
@@ -576,15 +541,8 @@ def plot_monte_carlo(d):
 # ==========================================
 with st.sidebar:
     st.title("🌌 Willie's Omega")
-    st.caption("V17.1 | 終極完全體")
-    
-    st.info("""
-    融合 V15.1 強大運算與 V16 白箱 AI
-    
-    修復內容：
-    ✅ 掃描結果為空時不再崩潰
-    ✅ 加入空值防護盾
-    """)
+    st.caption("V17.2 | 穩定修復版")
+    st.info("✅ 修復無限 Loading 問題\n✅ 修復篩選結果為空錯誤")
     
     with st.expander("⚡ 閃電下單"):
         c1, c2 = st.columns([2, 1])
@@ -593,10 +551,12 @@ with st.sidebar:
         t_p = st.number_input("價格", 0.0)
         t_s = st.number_input("股數", 1)
         if st.button("記錄"):
-            msg = DBManager.record_transaction(DataFetcher.normalize(t_t), t_a, t_p, t_s)
-            st.success(msg)
-            time.sleep(1)
-            st.rerun()
+            try:
+                msg = DBManager.record_transaction(DataFetcher.normalize(t_t), t_a, t_p, t_s)
+                st.success(msg)
+                time.sleep(1)
+                st.rerun()
+            except Exception as e: st.error(f"錯誤: {e}")
     
     if st.button("🔄 重整全站"): st.cache_data.clear(); st.rerun()
 
@@ -606,15 +566,17 @@ tabs = st.tabs(["📊 戰情儀表", "🎯 AI 量化選股", "🔎 深度戰情(
 with tabs[0]:
     st.subheader("🌍 全球市場")
     items = ["^TWII", "^TWOII", "^SOX", "^IXIC", "GC=F", "USDTWD=X"]
-    data = DataFetcher.fetch_batch_simple(items)
-    cols = st.columns(6)
-    for i, t in enumerate(items):
-        d = next((x for x in data if x['ticker'] == t), None)
-        with cols[i]:
-            if d: st.metric(t.replace("=F","").replace("^",""), f"{d['price']:,.2f}", f"{d['change_pct']:.2f}%")
-            else: st.metric(t, "Loading...")
+    try:
+        data = DataFetcher.fetch_batch_simple(items)
+        cols = st.columns(6)
+        for i, t in enumerate(items):
+            d = next((x for x in data if x['ticker'] == t), None)
+            with cols[i]:
+                if d: st.metric(t.replace("=F","").replace("^",""), f"{d['price']:,.2f}", f"{d['change_pct']:.2f}%")
+                else: st.metric(t, "Loading...")
+    except Exception as e: st.error(f"儀表板載入失敗: {e}")
 
-# Tab 2: V16 的篩選器 (關鍵修復區)
+# Tab 2: V16 的篩選器 (修復版)
 with tabs[1]:
     st.subheader("🎯 AI 因子選股")
     with st.expander("設定策略", expanded=True):
@@ -624,100 +586,111 @@ with tabs[1]:
         min_s = c3.slider("最低分", 0, 90, 60)
         
         if st.button("🚀 啟動 Willie 引擎"):
-            conn = sqlite3.connect(DB_NAME)
-            c = conn.cursor()
-            c.execute("SELECT value FROM system_config WHERE key=?", (univ,))
-            res = c.fetchone()
-            targets = res[0].split(",") if res else []
-            conn.close()
-            
-            pb = st.progress(0, "分析中...")
-            res = DataFetcher.fetch_batch_full(targets, pb)
-            pb.empty()
-            
-            rows = []
-            for r in res:
-                f = r['factors']
-                s = QuantBrain.score(f, strat) # 重算分數
-                if s >= min_s:
-                    rows.append({
-                        "代號": r['ticker'], "名稱": r['name'], "AI評分": s,
-                        "現價": r['price'], "PE": f"{f['pe']:.1f}", "ROE": f"{f['roe']*100:.1f}%",
-                        "AI論述": QuantBrain.explain(f, s)
-                    })
-            
-            # 【關鍵修復】檢查 rows 是否為空
-            if rows:
-                df_res = pd.DataFrame(rows)
-                st.dataframe(df_res.sort_values("AI評分", ascending=False), use_container_width=True)
-                st.success(f"找到 {len(rows)} 檔符合條件的標的！")
-            else:
-                st.warning("⚠️ 掃描完成，但沒有股票符合您設定的條件 (例如分數過高)。請嘗試降低標準或切換策略。")
+            try:
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("SELECT value FROM system_config WHERE key=?", (univ,))
+                res = c.fetchone()
+                targets = res[0].split(",") if res else []
+                conn.close()
+                
+                pb = st.progress(0, "分析中...")
+                res = DataFetcher.fetch_batch_full(targets, pb)
+                pb.empty()
+                
+                rows = []
+                for r in res:
+                    f = r['factors']
+                    s = QuantBrain.score(f, strat)
+                    if s >= min_s:
+                        rows.append({
+                            "代號": r['ticker'], "名稱": r['name'], "AI評分": s,
+                            "現價": r['price'], "PE": f"{f['pe']:.1f}", "ROE": f"{f['roe']*100:.1f}%",
+                            "AI論述": QuantBrain.explain(f, s)
+                        })
+                
+                if rows:
+                    df_res = pd.DataFrame(rows)
+                    st.dataframe(df_res.sort_values("AI評分", ascending=False)) # 移除 use_container_width 防止報錯
+                    st.success(f"找到 {len(rows)} 檔標的！")
+                else:
+                    st.warning("⚠️ 沒有符合條件的股票，請降低分數門檻或更換板塊。")
+                    
+            except Exception as e:
+                st.error(f"篩選發生錯誤: {e}")
 
 # Tab 3: V15.1 + V16 深度戰情
 with tabs[2]:
     c1, c2 = st.columns([3, 1])
     inp = c1.text_input("輸入代號", "2330.TW").upper()
-    if c2.button("分析"): DBManager.save_cache(DataFetcher.normalize(inp), {})
+    if c2.button("分析"): 
+        try:
+            DBManager.save_cache(DataFetcher.normalize(inp), {})
+        except: pass
     
-    d = DataFetcher.fetch_full(inp)
-    if d:
-        st.markdown(f"### {d['name']} ({d['ticker']})")
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("現價", d['price'], f"{d['change_pct']:.2f}%")
-        m2.metric("PE", f"{d['factors']['pe']:.1f}x")
-        m3.metric("殖利", f"{d['factors']['yield']:.1f}%")
-        m4.metric("夏普", f"{d['risk']['sharpe']:.2f}")
-        m5.metric("波動", f"{d['risk']['volatility']*100:.1f}%")
-        m6.metric("ATR", f"{d['factors'].get('atr',0):.1f}" if 'atr' in d['factors'] else "-") 
-        
-        c_ai, c_radar = st.columns([2, 1])
-        with c_ai:
-            st.info(f"**🧠 AI 決策報告 (Score: {d['score']})**\n\n{d['thesis']}")
-        with c_radar:
-            plot_radar(d)
+    try:
+        d = DataFetcher.fetch_full(inp)
+        if d:
+            st.markdown(f"### {d['name']} ({d['ticker']})")
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            m1.metric("現價", d['price'], f"{d['change_pct']:.2f}%")
+            m2.metric("PE", f"{d['factors']['pe']:.1f}x")
+            m3.metric("殖利", f"{d['factors']['yield']:.1f}%")
+            m4.metric("夏普", f"{d['risk']['sharpe']:.2f}")
+            m5.metric("波動", f"{d['risk']['volatility']*100:.1f}%")
+            m6.metric("ATR", f"{d['factors'].get('atr',0):.1f}" if 'atr' in d['factors'] else "-") 
             
-        plot_pro_chart(d)
-        
-        c_val, c_mc = st.columns(2)
-        with c_val:
-            st.markdown("#### 💎 價值河流")
-            if d.get('valuation'):
-                v = d['valuation']
-                st.write(f"便宜: {v['cheap']:.1f} | 合理: {v['fair']:.1f} | 昂貴: {v['expensive']:.1f}")
-        with c_mc:
-            st.markdown("#### 🎲 蒙地卡羅模擬")
-            plot_monte_carlo(d)
+            c_ai, c_radar = st.columns([2, 1])
+            with c_ai:
+                st.info(f"**🧠 AI 決策報告 (Score: {d['score']})**\n\n{d['thesis']}")
+            with c_radar:
+                plot_radar(d)
+                
+            plot_pro_chart(d)
+            
+            c_val, c_mc = st.columns(2)
+            with c_val:
+                st.markdown("#### 💎 價值河流")
+                if d.get('valuation'):
+                    v = d['valuation']
+                    st.write(f"便宜: {v['cheap']:.1f} | 合理: {v['fair']:.1f} | 昂貴: {v['expensive']:.1f}")
+            with c_mc:
+                st.markdown("#### 🎲 蒙地卡羅模擬")
+                plot_monte_carlo(d)
+        else: st.warning("請輸入代號進行分析")
+    except Exception as e: st.error(f"分析失敗，請重試: {e}")
 
 # Tab 4: 帳本 (V15.1)
 with tabs[3]:
     st.subheader("💰 資產管理")
-    df_p = DBManager.get_portfolio()
-    if not df_p.empty:
-        tkrs = df_p['ticker'].tolist()
-        ups = DataFetcher.fetch_batch_simple(tkrs)
-        pmap = {u['ticker']: u['price'] for u in ups}
-        
-        rows = []
-        tm, tc = 0, 0
-        for _, r in df_p.iterrows():
-            cur = pmap.get(r['ticker'], r['avg_cost'])
-            mkt = cur * r['shares']
-            cst = r['avg_cost'] * r['shares']
-            tm += mkt; tc += cst
-            rows.append({"代號": r['ticker'], "股數": r['shares'], "成本": r['avg_cost'], "現價": cur, "損益": int(mkt-cst)})
+    try:
+        df_p = DBManager.get_portfolio()
+        if not df_p.empty:
+            tkrs = df_p['ticker'].tolist()
+            ups = DataFetcher.fetch_batch_simple(tkrs)
+            pmap = {u['ticker']: u['price'] for u in ups}
             
-        c1, c2 = st.columns(2)
-        c1.metric("市值", f"${tm:,.0f}")
-        c2.metric("損益", f"${tm-tc:,.0f}", f"{(tm-tc)/tc*100:.1f}%" if tc else "0%")
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-        
-        fig = px.pie(pd.DataFrame(rows), values='市值', names='代號', title='持倉分佈', hole=0.4)
-        fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
-        
-    st.markdown("### 📜 交易歷史")
-    st.dataframe(DBManager.get_transactions(), use_container_width=True)
+            rows = []
+            tm, tc = 0, 0
+            for _, r in df_p.iterrows():
+                cur = pmap.get(r['ticker'], r['avg_cost'])
+                mkt = cur * r['shares']
+                cst = r['avg_cost'] * r['shares']
+                tm += mkt; tc += cst
+                rows.append({"代號": r['ticker'], "股數": r['shares'], "成本": r['avg_cost'], "現價": cur, "損益": int(mkt-cst)})
+                
+            c1, c2 = st.columns(2)
+            c1.metric("市值", f"${tm:,.0f}")
+            c2.metric("損益", f"${tm-tc:,.0f}", f"{(tm-tc)/tc*100:.1f}%" if tc else "0%")
+            st.dataframe(pd.DataFrame(rows)) # 移除參數
+            
+            fig = px.pie(pd.DataFrame(rows), values='市值', names='代號', title='持倉分佈', hole=0.4)
+            fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig, use_container_width=True)
+            
+        st.markdown("### 📜 交易歷史")
+        st.dataframe(DBManager.get_transactions()) # 移除參數
+    except Exception as e: st.error(f"資產讀取錯誤: {e}")
 
 # Tab 5: 回測 (V15.1)
 with tabs[4]:
@@ -727,16 +700,18 @@ with tabs[4]:
     b_s = c2.selectbox("策略", ["kd", "ma"])
     
     if st.button("▶️ 開始回測"):
-        d = DataFetcher.fetch_full(b_t)
-        if d:
-            df_h = pd.read_json(d['hist_json'])
-            if 'Date' in df_h.columns: df_h['Date'] = pd.to_datetime(df_h['Date']); df_h.set_index('Date', inplace=True)
-            elif 'index' in df_h.columns: df_h['index'] = pd.to_datetime(df_h['index']); df_h.set_index('index', inplace=True)
-            
-            df_h = TechnicalEngine.calculate_all(df_h) # 確保指標存在
-            res = BacktestEngine.run(df_h, b_s)
-            
-            r1, r2 = st.columns(2)
-            r1.metric("期末資產", f"${res['final']:,.0f}")
-            r2.metric("報酬率", f"{res['ret']:.2f}%")
-            st.dataframe(pd.DataFrame(res['log']), use_container_width=True)
+        try:
+            d = DataFetcher.fetch_full(b_t)
+            if d:
+                df_h = pd.read_json(d['hist_json'])
+                if 'Date' in df_h.columns: df_h['Date'] = pd.to_datetime(df_h['Date']); df_h.set_index('Date', inplace=True)
+                elif 'index' in df_h.columns: df_h['index'] = pd.to_datetime(df_h['index']); df_h.set_index('index', inplace=True)
+                
+                df_h = TechnicalEngine.calculate_all(df_h)
+                res = BacktestEngine.run(df_h, b_s)
+                
+                r1, r2 = st.columns(2)
+                r1.metric("期末資產", f"${res['final']:,.0f}")
+                r2.metric("報酬率", f"{res['ret']:.2f}%")
+                st.dataframe(pd.DataFrame(res['log'])) # 移除參數
+        except Exception as e: st.error(f"回測失敗: {e}")
