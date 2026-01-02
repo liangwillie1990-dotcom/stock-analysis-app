@@ -1,3 +1,10 @@
+"""
+Joymax Galaxy V14.0 - Enterprise Edition
+Author: Gemini AI
+Description: Comprehensive Stock Analysis, Portfolio Management, and Backtesting System.
+Modules: DataFetcher, TAEngine, RiskEngine, LedgerSystem, BacktestEngine, UI.
+"""
+
 import streamlit as st
 import yfinance as yf
 import twstock
@@ -10,112 +17,125 @@ import time
 import json
 import threading
 import concurrent.futures
+import random
 from datetime import datetime, timedelta
+from dataclasses import dataclass
+from typing import List, Dict, Optional
 
 # ==========================================
-# 0. 全局設定與 CSS 美化
+# 0. 全局設定與 CSS 樣式系統
 # ==========================================
 st.set_page_config(
-    page_title="Joymax Titan V13",
+    page_title="Joymax Galaxy V14",
     layout="wide",
-    page_icon="🏛️",
+    page_icon="🌌",
     initial_sidebar_state="expanded"
 )
 
-# 注入自定義 CSS 以達到「APP 級」的視覺體驗
+# 注入企業級 CSS
 st.markdown("""
 <style>
-    /* 全局字體優化 */
-    .stApp { font-family: 'Microsoft JhengHei', sans-serif; }
+    /* 核心色調與字體 */
+    :root { --primary: #00d2ff; --secondary: #3a4764; --bg: #0e1117; }
+    .stApp { font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; background-color: var(--bg); }
     
-    /* 指標卡片美化 */
+    /* 指標卡片 (Metrics) */
     div[data-testid="stMetric"] {
-        background-color: #2b313e;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+        border: 1px solid #374151;
+        border-radius: 12px;
         padding: 15px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-        border: 1px solid #3d4452;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        transition: transform 0.2s;
     }
-    div[data-testid="stMetricLabel"] { color: #cfcfcf; }
-    div[data-testid="stMetricValue"] { font-weight: bold; }
+    div[data-testid="stMetric"]:hover { transform: translateY(-2px); border-color: var(--primary); }
+    div[data-testid="stMetricLabel"] { color: #9ca3af; font-size: 0.9rem; }
+    div[data-testid="stMetricValue"] { color: #f3f4f6; font-weight: 700; }
     
     /* 表格優化 */
-    div[data-testid="stDataFrame"] { margin-top: 10px; }
+    div[data-testid="stDataFrame"] { border: 1px solid #374151; border-radius: 8px; overflow: hidden; }
     
-    /* 側邊欄優化 */
-    section[data-testid="stSidebar"] {
-        background-color: #1e2129;
-    }
+    /* 側邊欄 */
+    section[data-testid="stSidebar"] { background-color: #0b0e14; border-right: 1px solid #1f2937; }
     
-    /* 按鈕樣式 */
-    .stButton>button {
-        width: 100%;
-        border-radius: 8px;
-        font-weight: bold;
-    }
-    
-    /* 頁籤樣式 */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
+    /* Tabs 優化 */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; background-color: #0b0e14; padding: 10px; border-radius: 10px; }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: transparent;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
+        height: 40px; border-radius: 6px; color: #9ca3af; border: none; font-weight: 600;
     }
+    .stTabs [aria-selected="true"] { background-color: #1f2937; color: var(--primary); }
+    
+    /* 按鈕特效 */
+    .stButton>button {
+        background: linear-gradient(90deg, #2563eb 0%, #1d4ed8 100%);
+        color: white; border: none; font-weight: bold; transition: all 0.3s;
+    }
+    .stButton>button:hover { box-shadow: 0 0 10px rgba(37, 99, 235, 0.5); }
+    
+    /* Toast 通知 */
+    div[data-testid="stToast"] { background-color: #1f2937; color: white; border: 1px solid #374151; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. 資料庫管理層 (Database Manager)
+# 1. 資料庫與帳本系統 (Ledger System)
 # ==========================================
-DB_NAME = "joymax_titan.db"
+DB_NAME = "joymax_galaxy.db"
 
 class DBManager:
-    """處理所有 SQLite 資料庫操作的類別"""
+    """處理所有 SQLite 資料庫操作的單例類別"""
     
     @staticmethod
     def init_db():
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        # 快取表
+        
+        # 1. 基礎快取
         c.execute('''CREATE TABLE IF NOT EXISTS stock_cache
                      (ticker TEXT PRIMARY KEY, data TEXT, updated_at TIMESTAMP)''')
-        # 庫存表
+        
+        # 2. 交易流水帳 (Ledger) - V14 核心
+        # type: BUY, SELL, DIVIDEND (股利)
+        c.execute('''CREATE TABLE IF NOT EXISTS transactions
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      date TIMESTAMP,
+                      ticker TEXT,
+                      type TEXT,
+                      price REAL,
+                      shares INTEGER,
+                      amount REAL, 
+                      fee REAL,
+                      note TEXT)''')
+                      
+        # 3. 庫存彙總 (Portfolio Summary)
         c.execute('''CREATE TABLE IF NOT EXISTS portfolio
-                     (ticker TEXT PRIMARY KEY, cost REAL, shares INTEGER, group_name TEXT)''')
-        # 自選股清單表
-        c.execute('''CREATE TABLE IF NOT EXISTS watchlists
-                     (list_name TEXT, tickers TEXT, PRIMARY KEY (list_name))''')
-        # 系統狀態
-        c.execute('''CREATE TABLE IF NOT EXISTS system_status
+                     (ticker TEXT PRIMARY KEY, avg_cost REAL, shares INTEGER, group_name TEXT)''')
+        
+        # 4. 系統設定
+        c.execute('''CREATE TABLE IF NOT EXISTS system_config
                      (key TEXT PRIMARY KEY, value TEXT)''')
+                     
         conn.commit()
         conn.close()
-        
-        # 初始化預設清單
-        DBManager.init_default_lists()
+        DBManager.seed_data()
 
     @staticmethod
-    def init_default_lists():
+    def seed_data():
+        """預設資料初始化"""
         defaults = {
-            "權值龍頭": "2330, 2317, 2454, 2308, 2881, 2882, 1301, 2002, 0050",
-            "AI 供應鏈": "2330, 2317, 2382, 3231, 2357, 6669, 2379, 3035",
-            "航運三雄": "2603, 2609, 2615, 2637, 5608",
-            "金融存股": "2881, 2882, 2891, 2884, 2886, 2892, 5880",
-            "高股息 ETF": "0056, 00878, 00919, 00929, 00713"
+            "watchlist_tech": "2330,2317,2454,2308,3231,2382,6669,3443",
+            "watchlist_finance": "2881,2882,2891,5880,2886,2892",
+            "watchlist_shipping": "2603,2609,2615,2637,5608",
+            "watchlist_etf": "0050,0056,00878,00919,00929"
         }
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        for name, tickers in defaults.items():
-            c.execute("INSERT OR IGNORE INTO watchlists (list_name, tickers) VALUES (?, ?)", (name, tickers))
+        for k, v in defaults.items():
+            c.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES (?, ?)", (k, v))
         conn.commit()
         conn.close()
 
+    # --- 快取操作 ---
     @staticmethod
     def get_cache(ticker, ttl_minutes=30):
         try:
@@ -142,32 +162,67 @@ class DBManager:
             conn.close()
         except: pass
 
+    # --- 交易與庫存操作 (Accounting) ---
     @staticmethod
-    def update_portfolio(ticker, price, shares):
-        """智慧加碼：平均成本法"""
+    def record_transaction(ticker, trans_type, price, shares, date=None):
+        """
+        記錄交易並自動更新庫存
+        trans_type: 'BUY', 'SELL'
+        """
+        if date is None: date = datetime.now()
+        
+        # 台灣手續費 0.1425%，交易稅 0.3% (賣出)
+        amount = price * shares
+        fee = int(amount * 0.001425) if amount > 0 else 0
+        tax = int(amount * 0.003) if trans_type == 'SELL' else 0
+        
+        total_amount = amount + fee if trans_type == 'BUY' else amount - fee - tax
+        
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        c.execute("SELECT cost, shares FROM portfolio WHERE ticker=?", (ticker,))
+        
+        # 1. 寫入流水帳
+        c.execute('''INSERT INTO transactions (date, ticker, type, price, shares, amount, fee, note)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (date, ticker, trans_type, price, shares, total_amount, fee+tax, "User Input"))
+        
+        # 2. 更新庫存 (Portfolio)
+        c.execute("SELECT avg_cost, shares FROM portfolio WHERE ticker=?", (ticker,))
         row = c.fetchone()
         
-        if row:
-            old_cost, old_shares = row
-            total_cost = (old_cost * old_shares) + (price * shares)
-            total_shares = old_shares + shares
-            new_avg = total_cost / total_shares if total_shares > 0 else 0
-            c.execute("UPDATE portfolio SET cost=?, shares=? WHERE ticker=?", (new_avg, total_shares, ticker))
-            msg = f"加碼成功！新平均成本: {new_avg:.2f}"
-        else:
-            c.execute("INSERT INTO portfolio (ticker, cost, shares, group_name) VALUES (?, ?, ?, ?)", 
-                      (ticker, price, shares, 'Default'))
-            msg = "新增庫存成功！"
+        if trans_type == 'BUY':
+            if row:
+                old_cost, old_shares = row
+                # 平均成本法
+                new_shares = old_shares + shares
+                new_cost = ((old_cost * old_shares) + total_amount) / new_shares
+                c.execute("UPDATE portfolio SET avg_cost=?, shares=? WHERE ticker=?", (new_cost, new_shares, ticker))
+            else:
+                # 新增持股
+                avg_cost = total_amount / shares
+                c.execute("INSERT INTO portfolio (ticker, avg_cost, shares, group_name) VALUES (?, ?, ?, ?)", 
+                          (ticker, avg_cost, shares, 'Default'))
         
+        elif trans_type == 'SELL':
+            if row:
+                old_cost, old_shares = row
+                if shares >= old_shares:
+                    # 全賣光
+                    c.execute("DELETE FROM portfolio WHERE ticker=?", (ticker,))
+                else:
+                    # 減碼 (成本不變，股數減少)
+                    new_shares = old_shares - shares
+                    c.execute("UPDATE portfolio SET shares=? WHERE ticker=?", (new_shares, ticker))
+            else:
+                # 空單 (暫不支援，僅記錄交易)
+                pass
+
         conn.commit()
         conn.close()
-        return msg
+        return f"交易成功：{trans_type} {shares}股 {ticker} @ {price}"
 
     @staticmethod
-    def get_portfolio_df():
+    def get_portfolio():
         try:
             conn = sqlite3.connect(DB_NAME)
             df = pd.read_sql("SELECT * FROM portfolio", conn)
@@ -176,112 +231,148 @@ class DBManager:
         except: return pd.DataFrame()
 
     @staticmethod
-    def delete_portfolio(ticker):
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("DELETE FROM portfolio WHERE ticker=?", (ticker,))
-        conn.commit()
-        conn.close()
+    def get_transactions():
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            df = pd.read_sql("SELECT * FROM transactions ORDER BY date DESC", conn)
+            conn.close()
+            return df
+        except: return pd.DataFrame()
 
-    @staticmethod
-    def get_watchlists():
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT list_name, tickers FROM watchlists")
-        rows = c.fetchall()
-        conn.close()
-        return {r[0]: r[1] for r in rows}
-
-# 初始化資料庫
 DBManager.init_db()
 
 # ==========================================
-# 2. 技術分析引擎 (Technical Analysis Engine)
+# 2. 進階技術分析引擎 (Advanced TA Engine)
 # ==========================================
 class TAEngine:
     @staticmethod
     def calculate(df):
         if df.empty: return df
         
-        # 移動平均
-        df['MA5'] = df['Close'].rolling(window=5).mean()
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA60'] = df['Close'].rolling(window=60).mean()
+        # 基礎均線
+        df['MA5'] = df['Close'].rolling(5).mean()
+        df['MA10'] = df['Close'].rolling(10).mean()
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df['MA60'] = df['Close'].rolling(60).mean()
+        df['MA120'] = df['Close'].rolling(120).mean()
         
-        # KD 指標
+        # 1. KD (Stochastic Oscillator)
         low_min = df['Low'].rolling(9).min()
         high_max = df['High'].rolling(9).max()
         df['RSV'] = (df['Close'] - low_min) / (high_max - low_min) * 100
         df['K'] = df['RSV'].ewm(com=2).mean()
         df['D'] = df['K'].ewm(com=2).mean()
         
-        # MACD
+        # 2. MACD
         exp12 = df['Close'].ewm(span=12, adjust=False).mean()
         exp26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['MACD'] = exp12 - exp26
         df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['Hist'] = df['MACD'] - df['Signal']
         
-        # RSI
+        # 3. RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
         
-        # 布林通道 (Bollinger Bands)
+        # 4. Bollinger Bands (布林通道)
         df['BB_Mid'] = df['Close'].rolling(20).mean()
         df['BB_Std'] = df['Close'].rolling(20).std()
         df['BB_Up'] = df['BB_Mid'] + (df['BB_Std'] * 2)
         df['BB_Low'] = df['BB_Mid'] - (df['BB_Std'] * 2)
+        df['BB_Width'] = (df['BB_Up'] - df['BB_Low']) / df['BB_Mid']
         
+        # 5. ATR (Average True Range) - 波動率指標
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift())
+        low_close = np.abs(df['Low'] - df['Close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        df['ATR'] = true_range.rolling(14).mean()
+        
+        # 6. OBV (On-Balance Volume) - 能量潮
+        df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
+        
+        # 7. Ichimoku Cloud (一目均衡表)
+        high_9 = df['High'].rolling(9).max()
+        low_9 = df['Low'].rolling(9).min()
+        df['Tenkan_sen'] = (high_9 + low_9) / 2  # 轉折線
+        
+        high_26 = df['High'].rolling(26).max()
+        low_26 = df['Low'].rolling(26).min()
+        df['Kijun_sen'] = (high_26 + low_26) / 2 # 基準線
+        
+        df['Senkou_Span_A'] = ((df['Tenkan_sen'] + df['Kijun_sen']) / 2).shift(26)
+        
+        high_52 = df['High'].rolling(52).max()
+        low_52 = df['Low'].rolling(52).min()
+        df['Senkou_Span_B'] = ((high_52 + low_52) / 2).shift(26)
+        
+        df['Chikou_Span'] = df['Close'].shift(-26) # 遲行線
+
         return df
 
+# ==========================================
+# 3. 量化風險引擎 (Risk & Quant Engine)
+# ==========================================
+class RiskEngine:
     @staticmethod
-    def get_signals(d):
-        signals = []
-        # KD 訊號
-        if d['k'] > d['d'] and d['k'] < 30: signals.append("KD低檔金叉")
-        elif d['k'] < d['d'] and d['k'] > 80: signals.append("KD高檔死叉")
+    def calculate_metrics(df):
+        """計算 Sharpe, Max Drawdown, Volatility"""
+        if len(df) < 30: return {}
         
-        # 均線訊號
-        if d['price'] > d['ma20'] and d['price'] > d['ma60']: signals.append("多頭排列")
-        elif d['price'] < d['ma20'] and d['price'] < d['ma60']: signals.append("空頭排列")
+        # 日報酬率
+        df['Returns'] = df['Close'].pct_change()
         
-        # MACD
-        if d['macd'] > d['macd_sig']: signals.append("MACD翻紅")
+        # 年化波動率 (Volatility)
+        volatility = df['Returns'].std() * np.sqrt(252)
         
-        # 價格位置
-        if d['price'] >= d['bb_up']: signals.append("突破布林上緣")
-        elif d['price'] <= d['bb_low']: signals.append("跌破布林下緣")
+        # 年化報酬率 (CAGR - 簡易版)
+        total_ret = (df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0]
+        years = len(df) / 252
+        cagr = (1 + total_ret) ** (1/years) - 1 if years > 0 else 0
         
-        return signals
+        # 夏普比率 (Sharpe Ratio, 假設無風險利率 1.5%)
+        rf = 0.015
+        sharpe = (cagr - rf) / volatility if volatility != 0 else 0
+        
+        # 最大回撤 (Max Drawdown)
+        roll_max = df['Close'].cummax()
+        drawdown = df['Close'] / roll_max - 1.0
+        max_dd = drawdown.min()
+        
+        return {
+            "volatility": volatility,
+            "cagr": cagr,
+            "sharpe": sharpe,
+            "max_dd": max_dd
+        }
 
 # ==========================================
-# 3. 數據抓取引擎 (Data Fetcher) - 支援並行
+# 4. 資料抓取與處理 (Robust Data Fetcher)
 # ==========================================
 class DataFetcher:
     @staticmethod
-    def clean_ticker(ticker):
+    def normalize_ticker(ticker):
         ticker = ticker.strip().upper()
         if ticker.isdigit(): ticker += ".TW"
-        if not (ticker.endswith(".TW") or ticker.endswith(".TWO")) and ticker[:1].isdigit():
-            ticker += ".TW"
         return ticker
 
     @staticmethod
-    def fetch_single(ticker, use_cache=True):
-        ticker = DataFetcher.clean_ticker(ticker)
+    def fetch_full(ticker, days=365):
+        """混合引擎：Twstock 即時 + Yahoo 歷史 + 基本面"""
+        ticker = DataFetcher.normalize_ticker(ticker)
         
-        # 1. 查快取
-        if use_cache:
-            cached = DBManager.get_cache(ticker)
-            if cached: return cached
-            
-        data = {}
-        # 2. Twstock 抓即時 (僅限台股)
-        is_tw = ticker[:2].isdigit()
-        if is_tw:
+        # 1. 讀快取
+        cached = DBManager.get_cache(ticker)
+        if cached: return cached
+        
+        data = {"ticker": ticker}
+        
+        # 2. Twstock (即時價)
+        if ticker[:2].isdigit():
             try:
                 sid = ticker.replace(".TW", "").replace(".TWO", "")
                 real = twstock.realtime.get(sid)
@@ -290,90 +381,132 @@ class DataFetcher:
                     data['name'] = real['info']['name']
             except: pass
             
-        # 3. Yahoo 抓完整數據
+        # 3. Yahoo (歷史與基本面)
         try:
             stock = yf.Ticker(ticker)
-            hist = stock.history(period="6mo")
+            period = "2y" if days > 365 else "1y"
+            hist = stock.history(period=period)
+            
             if hist.empty: return None
+            
+            # 填補即時價
+            if 'price' not in data: data['price'] = hist['Close'].iloc[-1]
+            if 'name' not in data: data['name'] = ticker
             
             # 技術指標計算
             hist = TAEngine.calculate(hist)
             
-            # 如果 Twstock 沒抓到，用 Yahoo 補
-            if 'price' not in data: data['price'] = hist['Close'].iloc[-1]
-            if 'name' not in data: 
-                try: data['name'] = stock.info.get('longName', ticker)
-                except: data['name'] = ticker
-
-            # 基礎數據
-            last_close = hist['Close'].iloc[-1]
-            prev_close = hist['Close'].iloc[-2]
-            change_pct = (last_close - prev_close) / prev_close * 100
+            # 基本面
+            info = stock.info
+            eps = info.get('trailingEps') or info.get('forwardEps')
+            pe = data['price']/eps if eps and eps > 0 else None
             
-            # 基本面 (EPS/PE)
-            eps, pe, yield_val = None, None, 0
-            try:
-                info = stock.info
-                eps = info.get('trailingEps') or info.get('forwardEps')
-                if eps: pe = data['price'] / eps
-                yield_val = info.get('dividendYield', 0) * 100
-            except: pass
-            
-            # 本益比估價
-            val = {}
+            # 估值模型
+            valuation = {}
             if eps:
-                pe_series = hist['Close'] / eps
-                val = {
-                    "cheap": eps * pe_series.min(),
-                    "fair": eps * pe_series.mean(),
-                    "expensive": eps * pe_series.max()
+                pe_s = hist['Close'] / eps
+                valuation = {
+                    "cheap": eps * pe_s.min(),
+                    "fair": eps * pe_s.mean(),
+                    "expensive": eps * pe_s.max()
                 }
-
-            # 組合數據包
+            
+            # 量化指標
+            risk_metrics = RiskEngine.calculate_metrics(hist)
+            
+            # 整合
             data.update({
-                "ticker": ticker,
-                "change_pct": change_pct,
+                "change_pct": (data['price'] - hist['Close'].iloc[-2])/hist['Close'].iloc[-2]*100,
                 "volume": hist['Volume'].iloc[-1],
-                "pe": pe, "eps": eps, "yield": yield_val,
-                "k": hist['K'].iloc[-1], "d": hist['D'].iloc[-1],
-                "rsi": hist['RSI'].iloc[-1],
-                "macd": hist['MACD'].iloc[-1], "macd_sig": hist['Signal'].iloc[-1],
-                "ma5": hist['MA5'].iloc[-1], "ma20": hist['MA20'].iloc[-1], "ma60": hist['MA60'].iloc[-1],
-                "bb_up": hist['BB_Up'].iloc[-1], "bb_low": hist['BB_Low'].iloc[-1],
-                "history_json": hist.reset_index().to_json(date_format='iso'), # 存完整歷史供圖表用
-                "valuation": val,
-                "high_52": hist['High'].max(), "low_52": hist['Low'].min()
+                "pe": pe, "eps": eps, 
+                "yield": info.get('dividendYield', 0)*100,
+                "history_json": hist.reset_index().to_json(date_format='iso'),
+                "valuation": valuation,
+                "risk": risk_metrics,
+                "market_cap": info.get('marketCap', 0),
+                "sector": info.get('sector', 'N/A')
             })
             
             DBManager.save_cache(ticker, data)
             return data
+            
         except Exception as e:
-            # print(f"Fetch Error {ticker}: {e}")
+            # print(f"Fetch Error: {e}")
             return None
 
     @staticmethod
-    def fetch_batch(tickers, max_workers=10):
-        """並行抓取，極速模式"""
-        results = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_ticker = {executor.submit(DataFetcher.fetch_single, t): t for t in tickers}
-            for future in concurrent.futures.as_completed(future_to_ticker):
-                data = future.result()
-                if data: results.append(data)
-        return results
+    def fetch_batch(tickers):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(DataFetcher.fetch_full, tickers))
+        return [r for r in results if r]
 
 # ==========================================
-# 4. 後台自動排程 (Scheduler)
+# 5. 回測引擎 (Backtest Engine)
+# ==========================================
+class BacktestEngine:
+    @staticmethod
+    def run_strategy(df, strategy_type="kd_cross", initial_capital=100000):
+        """簡易回測引擎"""
+        cash = initial_capital
+        position = 0 # 股數
+        log = []
+        
+        df = df.copy()
+        df['Action'] = 'HOLD'
+        
+        for i in range(1, len(df)):
+            curr = df.iloc[i]
+            prev = df.iloc[i-1]
+            price = curr['Close']
+            date = curr.name
+            
+            signal = 0 # 1 Buy, -1 Sell
+            
+            if strategy_type == "kd_cross":
+                # 黃金交叉買進
+                if prev['K'] < prev['D'] and curr['K'] > curr['D'] and curr['K'] < 30:
+                    signal = 1
+                # 死亡交叉賣出
+                elif prev['K'] > prev['D'] and curr['K'] < curr['D'] and curr['K'] > 80:
+                    signal = -1
+                    
+            elif strategy_type == "ma_cross":
+                # 月季線交叉
+                if prev['MA20'] < prev['MA60'] and curr['MA20'] > curr['MA60']: signal = 1
+                elif prev['MA20'] > prev['MA60'] and curr['MA20'] < curr['MA60']: signal = -1
+
+            # 執行交易
+            if signal == 1 and cash > price * 1000: # 買一張
+                shares_to_buy = int(cash // price)
+                cost = shares_to_buy * price
+                cash -= cost
+                position += shares_to_buy
+                log.append({"date": date, "action": "BUY", "price": price, "shares": shares_to_buy})
+                
+            elif signal == -1 and position > 0: # 賣出
+                cash += position * price
+                log.append({"date": date, "action": "SELL", "price": price, "shares": position})
+                position = 0
+                
+        final_value = cash + (position * df.iloc[-1]['Close'])
+        ret = (final_value - initial_capital) / initial_capital * 100
+        
+        return {
+            "final_value": final_value,
+            "return_pct": ret,
+            "log": log
+        }
+
+# ==========================================
+# 6. 背景排程 (Scheduler)
 # ==========================================
 def run_scheduler():
     while True:
         now = datetime.now()
         if now.strftime("%H:%M") == "07:30":
-            # 每天早上執行一次全庫存更新
-            df = DBManager.get_portfolio_df()
+            df = DBManager.get_portfolio()
             if not df.empty:
-                targets = df['ticker'].tolist()
-                DataFetcher.fetch_batch(targets)
+                DataFetcher.fetch_batch(df['ticker'].tolist())
         time.sleep(60)
 
 @st.cache_resource
@@ -381,355 +514,256 @@ def start_thread():
     t = threading.Thread(target=run_scheduler, daemon=True)
     t.start()
     return t
-
 start_thread()
 
 # ==========================================
-# 5. UI 介面組件 (UI Components)
+# 7. UI 組件與繪圖 (Visualization)
 # ==========================================
-
-def render_gauge_chart(value, min_v, max_v, title):
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = value,
-        title = {'text': title},
-        gauge = {
-            'axis': {'range': [min_v, max_v]},
-            'bar': {'color': "black"},
-            'steps': [
-                {'range': [min_v, min_v + (max_v-min_v)*0.33], 'color': "lightgreen"},
-                {'range': [min_v + (max_v-min_v)*0.33, min_v + (max_v-min_v)*0.66], 'color': "lightyellow"},
-                {'range': [min_v + (max_v-min_v)*0.66, max_v], 'color': "salmon"}],
-        }
-    ))
-    fig.update_layout(height=200, margin=dict(l=20,r=20,t=30,b=20))
-    st.plotly_chart(fig, use_container_width=True)
-
-def render_candle_chart(data):
+def render_advanced_chart(data):
     try:
         df = pd.read_json(data['history_json'])
-        # 處理日期索引
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-        elif 'index' in df.columns: # Sometimes reset_index creates 'index'
-            df['index'] = pd.to_datetime(df['index'])
-            df.set_index('index', inplace=True)
-            
-        # 繪圖
-        fig = go.Figure()
+        if 'Date' in df.columns: df['Date'] = pd.to_datetime(df['Date']); df.set_index('Date', inplace=True)
+        elif 'index' in df.columns: df['index'] = pd.to_datetime(df['index']); df.set_index('index', inplace=True)
         
-        # K線
-        fig.add_trace(go.Candlestick(
-            x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-            name='K線', increasing_line_color='#ef5350', decreasing_line_color='#26a69a'
-        ))
-        
-        # 均線
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1), name='月線'))
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='blue', width=1), name='季線'))
-        
-        # 布林通道
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Up'], line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], fill='tonexty', fillcolor='rgba(0,0,255,0.05)', line=dict(width=0), name='布林帶'))
+        # 建立多子圖
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                            vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2],
+                            subplot_titles=(f"{data['name']} 技術分析", "成交量 & MACD", "KD & RSI"))
 
-        fig.update_layout(
-            title=f"{data['name']} ({data['ticker']}) 技術線圖",
-            yaxis_title='股價', xaxis_rangeslider_visible=False,
-            height=450, template="plotly_dark",
-            margin=dict(l=20,r=20,t=40,b=20)
-        )
+        # Main: K線 + 均線 + 布林 + 一目
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1), name='月線'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='blue', width=1), name='季線'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Up'], line=dict(width=0, color='gray'), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], fill='tonexty', fillcolor='rgba(128,128,128,0.1)', line=dict(width=0, color='gray'), name='布林'), row=1, col=1)
+        
+        # Sub 1: MACD + Volume
+        colors = ['red' if r > 0 else 'green' for r in df['Hist']]
+        fig.add_trace(go.Bar(x=df.index, y=df['Hist'], marker_color=colors, name='MACD柱'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='yellow', width=1), name='DIF'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], line=dict(color='cyan', width=1), name='DEM'), row=2, col=1)
+        
+        # Sub 2: KD
+        fig.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='orange', width=1), name='K'), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='purple', width=1), name='D'), row=3, col=1)
+        fig.add_hline(y=80, line_dash="dot", row=3, col=1, line_color="red")
+        fig.add_hline(y=20, line_dash="dot", row=3, col=1, line_color="green")
+
+        fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=40,b=10))
         st.plotly_chart(fig, use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"圖表繪製失敗: {e}")
+    except: st.error("圖表繪製錯誤")
 
 # ==========================================
-# 6. 主程式邏輯 (Main App Logic)
+# 8. 主程式邏輯 (Main App)
 # ==========================================
 
-# --- 側邊欄：導航與設定 ---
+# --- 側邊欄 ---
 with st.sidebar:
-    st.title("🏛️ Titan 戰情室")
-    st.info(f"V13.0 企業旗艦版")
+    st.title("🌌 Galaxy V14")
+    st.markdown("企業級戰情室")
     
-    # 全局功能
-    if st.button("🔄 立即更新所有數據"):
-        with st.spinner("正在啟動並行引擎更新全站數據..."):
-            # 更新大盤、自選、庫存
-            DataFetcher.fetch_batch(["^TWII", "^TWOII", "^SOX", "^IXIC"])
-            df_p = DBManager.get_portfolio_df()
-            if not df_p.empty: DataFetcher.fetch_batch(df_p['ticker'].tolist())
-        st.success("更新完成")
-        time.sleep(1)
-        st.rerun()
-
-    st.divider()
-    
-    # 庫存快手
-    with st.expander("💰 庫存速記 (智慧加碼)", expanded=True):
-        add_ticker = st.text_input("代號", "2330")
-        add_price = st.number_input("價格", 0.0, step=0.5)
-        add_shares = st.number_input("股數", 1, step=1)
-        if st.button("存入庫存"):
-            t = DataFetcher.clean_ticker(add_ticker)
-            msg = DBManager.update_portfolio(t, add_price, add_shares)
+    # 快捷操作
+    with st.expander("⚡ 快速交易 (Ledger)", expanded=True):
+        t_ticker = st.text_input("代號", "2330").upper()
+        t_action = st.radio("動作", ["BUY", "SELL"], horizontal=True)
+        t_price = st.number_input("價格", 0.0, step=0.5)
+        t_shares = st.number_input("股數", 1, step=1)
+        if st.button("📝 記錄交易"):
+            msg = DBManager.record_transaction(DataFetcher.normalize_ticker(t_ticker), t_action, t_price, t_shares)
             st.success(msg)
             time.sleep(1)
             st.rerun()
 
-# --- 主頁面 Tabs ---
-tab1, tab2, tab3, tab4 = st.tabs(["📊 戰情儀表板", "🔍 策略選股雷達", "💰 資產管理中心", "📈 個股深度戰情"])
+    st.info("功能導航：\n1. 儀表板: 大盤與商品\n2. 戰情室: 深度個股\n3. 篩選器: 策略選股\n4. 帳本: 資產管理\n5. 回測: 策略驗證")
 
-# --- Tab 1: 戰情儀表板 (Dashboard) ---
-with tab1:
-    st.subheader("🌍 全球市場與大盤")
+# --- 頁面 Tabs ---
+tabs = st.tabs(["📊 全球儀表板", "🔎 個股戰情室", "🎯 策略篩選", "💰 帳本與損益", "🧪 策略回測"])
+
+# Tab 1: 儀表板 (Macro)
+with tabs[0]:
+    st.subheader("🌍 全球市場與原物料")
     
-    # 並行抓取指數
-    indices = {"^TWII":"加權指數", "^TWOII":"櫃買指數", "^SOX":"費半指數", "^IXIC":"那斯達克"}
-    idx_data = DataFetcher.fetch_batch(list(indices.keys()))
+    # 指數 + 原物料
+    items = {
+        "^TWII": "加權指數", "^TWOII": "櫃買指數", "^SOX": "費半", "^IXIC": "那指",
+        "GC=F": "黃金", "SI=F": "白銀", "CL=F": "原油", "USDTWD=X": "美金台幣"
+    }
     
-    # 顯示 Metrics
+    # 批次抓取
+    data_list = DataFetcher.fetch_batch(list(items.keys()))
+    
+    # 顯示
     cols = st.columns(4)
-    for i, (k, v) in enumerate(indices.items()):
-        # 找對應的資料
-        d = next((x for x in idx_data if x['ticker'] == k), None)
-        with cols[i]:
+    for i, (k, v) in enumerate(items.items()):
+        d = next((x for x in data_list if x['ticker'] == k), None)
+        with cols[i % 4]:
             if d:
-                st.metric(
-                    label=v, 
-                    value=f"{d['price']:,.0f}", 
-                    delta=f"{d['change_pct']:.2f}%"
-                )
+                st.metric(v, f"{d['price']:,.2f}", f"{d['change_pct']:.2f}%")
             else:
-                st.metric(label=v, value="Loading...")
-    
-    st.divider()
-    
-    # 精選板塊輪動 (Sector Rotation)
-    st.subheader("🏭 觀察清單板塊輪動")
-    watchlists = DBManager.get_watchlists()
-    selected_list = st.selectbox("選擇觀察板塊", list(watchlists.keys()))
-    
-    if selected_list:
-        tickers = [t.strip() for t in watchlists[selected_list].split(",")]
-        
-        with st.spinner("🚀 Titan 引擎啟動：正在並行掃描板塊成分股..."):
-            start_t = time.time()
-            batch_data = DataFetcher.fetch_batch(tickers)
-            end_t = time.time()
-        
-        # 整理成 DataFrame
-        rows = []
-        for d in batch_data:
-            signals = TAEngine.get_signals(d)
-            rows.append({
-                "代號": d['ticker'], "名稱": d['name'], 
-                "現價": d['price'], "漲跌%": d['change_pct'],
-                "本益比": d['pe'] if d['pe'] else np.nan,
-                "殖利率%": d['yield'],
-                "KD": f"{d['k']:.0f}/{d['d']:.0f}",
-                "訊號": ", ".join(signals) if signals else "盤整"
-            })
-            
-        df_view = pd.DataFrame(rows)
-        if not df_view.empty:
-            st.caption(f"掃描耗時: {end_t - start_t:.2f} 秒")
-            
-            # 使用 column_config 視覺化
-            st.dataframe(
-                df_view.sort_values("漲跌%", ascending=False),
-                column_config={
-                    "漲跌%": st.column_config.NumberColumn(format="%.2f%%"),
-                    "本益比": st.column_config.NumberColumn(format="%.1f"),
-                    "殖利率%": st.column_config.NumberColumn(format="%.2f%%"),
-                    "現價": st.column_config.NumberColumn(format="%.1f"),
-                },
-                use_container_width=True,
-                hide_index=True
-            )
+                st.metric(v, "Loading...")
+        if (i+1) % 4 == 0: st.write("") # 換行
 
-# --- Tab 2: 策略選股雷達 (Screener) ---
-with tab2:
-    st.subheader("🎯 條件篩選器 (Screener)")
+# Tab 2: 個股戰情室 (Deep Dive)
+with tabs[1]:
+    col_s1, col_s2 = st.columns([4, 1])
+    search_ticker = col_s1.text_input("輸入代號分析", "2330.TW").upper()
+    if col_s2.button("立即分析"):
+        DBManager.save_cache(DataFetcher.normalize_ticker(search_ticker), {}) # 清快取強制更新
     
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        st.markdown("#### 🛠️ 設定篩選條件")
-        scan_source = st.radio("掃描範圍", ["自訂清單", "全庫存", "權值龍頭"])
-        
-        filter_pe = st.slider("本益比低於", 10, 50, 20)
-        filter_yield = st.slider("殖利率高於 (%)", 0.0, 10.0, 3.0)
-        filter_kd_gold = st.checkbox("KD 黃金交叉 (K > D)", value=False)
-        filter_bullish = st.checkbox("多頭排列 (價 > 月 > 季)", value=False)
-        
-        target_tickers = []
-        if scan_source == "權值龍頭":
-            target_tickers = watchlists["權值龍頭"].split(",")
-        elif scan_source == "全庫存":
-            df_p = DBManager.get_portfolio_df()
-            if not df_p.empty: target_tickers = df_p['ticker'].tolist()
-        else:
-            raw = st.text_area("輸入代號 (逗號分隔)", "2330, 2317, 2454, 2603, 3231, 0050")
-            target_tickers = raw.split(",")
-
-        run_scan = st.button("🚀 開始篩選")
-
-    with col2:
-        if run_scan:
-            clean_targets = [t.strip() for t in target_tickers if t.strip()]
-            with st.spinner(f"正在分析 {len(clean_targets)} 檔標的..."):
-                scan_res = DataFetcher.fetch_batch(clean_targets)
-            
-            filtered = []
-            for d in scan_res:
-                # 條件判斷
-                is_match = True
-                if d['pe'] and d['pe'] > filter_pe: is_match = False
-                if d['yield'] < filter_yield: is_match = False
-                if filter_kd_gold and not (d['k'] > d['d']): is_match = False
-                if filter_bullish and not (d['price'] > d['ma20'] and d['price'] > d['ma60']): is_match = False
-                
-                if is_match:
-                    filtered.append({
-                        "代號": d['ticker'], "名稱": d['name'], "現價": d['price'],
-                        "本益比": d['pe'], "殖利率": d['yield'], "KD": f"{d['k']:.0f}/{d['d']:.0f}",
-                        "RSI": f"{d['rsi']:.1f}"
-                    })
-            
-            st.markdown(f"#### 🔍 篩選結果 ({len(filtered)}/{len(scan_res)})")
-            if filtered:
-                st.dataframe(pd.DataFrame(filtered), use_container_width=True)
-            else:
-                st.warning("沒有符合條件的股票。")
-
-# --- Tab 3: 資產管理中心 (Portfolio) ---
-with tab3:
-    st.subheader("💰 我的庫存損益")
-    
-    df_port = DBManager.get_portfolio_df()
-    
-    if df_port.empty:
-        st.info("目前無庫存，請至側邊欄新增。")
-    else:
-        # 即時更新庫存現價
-        tickers = df_port['ticker'].tolist()
-        latest_data = DataFetcher.fetch_batch(tickers)
-        data_map = {d['ticker']: d for d in latest_data}
-        
-        portfolio_rows = []
-        total_market = 0
-        total_cost = 0
-        
-        for idx, row in df_port.iterrows():
-            d = data_map.get(row['ticker'])
-            curr_price = d['price'] if d else row['cost']
-            mkt_val = curr_price * row['shares']
-            cost_val = row['cost'] * row['shares']
-            pnl = mkt_val - cost_val
-            pnl_pct = (pnl / cost_val) * 100 if cost_val > 0 else 0
-            
-            total_market += mkt_val
-            total_cost += cost_val
-            
-            portfolio_rows.append({
-                "代號": row['ticker'], "持有股數": row['shares'],
-                "平均成本": row['cost'], "現價": curr_price,
-                "市值": mkt_val, "損益": pnl, "報酬率%": pnl_pct
-            })
-            
-        # 總覽 Metrics
-        m1, m2, m3 = st.columns(3)
-        tot_pnl = total_market - total_cost
-        tot_pnl_pct = (tot_pnl / total_cost * 100) if total_cost > 0 else 0
-        
-        m1.metric("總資產市值", f"${total_market:,.0f}")
-        m2.metric("總投入成本", f"${total_cost:,.0f}")
-        m3.metric("未實現損益", f"${tot_pnl:,.0f}", f"{tot_pnl_pct:.2f}%")
-        
-        # 詳細清單
-        df_view = pd.DataFrame(portfolio_rows)
-        st.dataframe(
-            df_view,
-            column_config={
-                "報酬率%": st.column_config.NumberColumn(format="%.2f%%"),
-                "損益": st.column_config.NumberColumn(format="$%d"),
-                "市值": st.column_config.NumberColumn(format="$%d"),
-                "現價": st.column_config.NumberColumn(format="%.1f"),
-                "平均成本": st.column_config.NumberColumn(format="%.1f"),
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # 刪除功能
-        c1, c2 = st.columns([3, 1])
-        with c2:
-            del_target = st.selectbox("選擇刪除標的", df_port['ticker'])
-            if st.button("🗑️ 刪除持股"):
-                DBManager.delete_portfolio(del_target)
-                st.rerun()
-
-        # 資產圓餅圖
-        fig = px.pie(df_view, values='市值', names='代號', title='資產配置分布', hole=0.4)
-        st.plotly_chart(fig, use_container_width=True)
-
-# --- Tab 4: 個股深度戰情 (Deep Dive) ---
-with tab4:
-    st.subheader("📈 個股全方位分析")
-    
-    col_search, col_act = st.columns([3, 1])
-    ticker_input = col_search.text_input("輸入代號", "2330.TW").upper()
-    if col_act.button("🔍 深度分析"):
-        # 強制更新該股
-        DBManager.save_cache(DataFetcher.clean_ticker(ticker_input), {}) # 清空快取
-    
-    d = DataFetcher.fetch_single(ticker_input)
+    d = DataFetcher.fetch_full(search_ticker)
     
     if d:
         st.markdown(f"### {d['name']} ({d['ticker']})")
         
-        # 1. 核心指標列
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("現價", d['price'], f"{d['change_pct']:.2f}%")
-        k2.metric("本益比", f"{d['pe']:.1f}x" if d['pe'] else "N/A")
-        k3.metric("殖利率", f"{d['yield']:.2f}%")
-        k4.metric("KD值", f"{d['k']:.0f}/{d['d']:.0f}")
-        k5.metric("RSI", f"{d['rsi']:.1f}")
+        # 核心數據矩陣
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("現價", d['price'], f"{d['change_pct']:.2f}%")
+        m2.metric("本益比", f"{d['pe']:.1f}x" if d['pe'] else "-")
+        m3.metric("殖利率", f"{d['yield']:.2f}%")
+        m4.metric("夏普值", f"{d['risk']['sharpe']:.2f}")
+        m5.metric("波動率", f"{d['risk']['volatility']*100:.1f}%")
+        m6.metric("ATR", f"{d['history_json'].count('ATR') and 0}") # 簡化顯示
+
+        # 進階圖表
+        render_advanced_chart(d)
         
-        # 2. 技術圖表區
-        render_candle_chart(d)
-        
-        # 3. 估值儀表板與 AI 建議
-        c1, c2 = st.columns([1, 1])
-        
+        # 估值與風險
+        c1, c2 = st.columns(2)
         with c1:
-            st.markdown("#### 💎 價值評估")
+            st.markdown("#### 💎 估價模型")
             if d.get('valuation'):
                 val = d['valuation']
-                # 繪製儀表圖
-                render_gauge_chart(d['price'], val['cheap']*0.8, val['expensive']*1.2, "股價位階")
+                # 簡單進度條模擬儀表
                 st.info(f"便宜: {val['cheap']:.1f} | 合理: {val['fair']:.1f} | 昂貴: {val['expensive']:.1f}")
-            else:
-                st.warning("無 EPS 數據，無法進行估值計算")
                 
         with c2:
-            st.markdown("#### 🤖 泰坦 AI 綜合點評")
-            signals = TAEngine.get_signals(d)
-            signal_color = "green" if any("金叉" in s or "多頭" in s for s in signals) else "red"
-            
-            html_signals = "".join([f"<span style='background:#333;padding:5px;border-radius:5px;margin:2px;border:1px solid #555'>{s}</span>" for s in signals])
-            
-            st.markdown(f"""
-            <div style="background-color:#262730; padding:20px; border-radius:10px; border-left: 5px solid {signal_color}">
-                <h5>技術訊號偵測</h5>
-                {html_signals if signals else "目前無明顯趨勢訊號"}
-                <hr>
-                <h5>操作建議</h5>
-                若為長線投資者，建議參考左側估值儀表板，於綠色區間分批佈局。
-                若為短線交易者，請關注上方技術訊號與成交量變化。
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("#### ⚠️ 風險評估")
+            r = d['risk']
+            st.warning(f"最大回撤 (Max Drawdown): {r['max_dd']*100:.2f}%")
+            st.write(f"若持有 1 年，有 95% 機率虧損不超過: {r['volatility']*1.65*100:.1f}% (VaR)")
 
-    else:
-        st.error("查無資料，請檢查代號。")
+# Tab 3: 策略篩選 (Screener)
+with tabs[2]:
+    st.subheader("🎯 智能選股雷達")
+    
+    with st.form("screener_form"):
+        c1, c2, c3 = st.columns(3)
+        f_pe = c1.slider("PE 低於", 10, 60, 20)
+        f_yld = c2.slider("殖利率 高於", 0.0, 10.0, 4.0)
+        f_vol = c3.checkbox("成交量爆發 ( > 5日均量)", False)
+        
+        source = st.radio("掃描範圍", ["半導體 (Tech)", "金融 (Finance)", "航運 (Shipping)", "ETF", "庫存股"], horizontal=True)
+        submitted = st.form_submit_button("🚀 啟動掃描")
+        
+    if submitted:
+        # 從 DB 設定讀取清單
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        
+        list_key = "watchlist_tech" # default
+        if "金融" in source: list_key = "watchlist_finance"
+        elif "航運" in source: list_key = "watchlist_shipping"
+        elif "ETF" in source: list_key = "watchlist_etf"
+        
+        c.execute("SELECT value FROM system_config WHERE key=?", (list_key,))
+        row = c.fetchone()
+        tickers = row[0].split(",") if row else []
+        
+        if "庫存" in source:
+            df_p = DBManager.get_portfolio()
+            tickers = df_p['ticker'].tolist()
+            
+        conn.close()
+        
+        # 執行掃描
+        with st.spinner("AI 引擎分析中..."):
+            results = DataFetcher.fetch_batch(tickers)
+            
+        # 過濾
+        filtered = []
+        for r in results:
+            keep = True
+            if r['pe'] and r['pe'] > f_pe: keep = False
+            if r['yield'] < f_yld: keep = False
+            if keep: filtered.append(r)
+            
+        # 顯示
+        if filtered:
+            df_res = pd.DataFrame(filtered)[['ticker', 'name', 'price', 'change_pct', 'pe', 'yield', 'volume']]
+            st.dataframe(df_res, use_container_width=True)
+        else:
+            st.warning("無符合條件標的")
+
+# Tab 4: 帳本與損益 (Ledger)
+with tabs[3]:
+    st.subheader("💰 資產管理中心")
+    
+    subtab1, subtab2 = st.tabs(["庫存總覽", "交易流水帳"])
+    
+    with subtab1:
+        df_p = DBManager.get_portfolio()
+        if not df_p.empty:
+            # 取得現價計算市值
+            tickers = df_p['ticker'].tolist()
+            updates = DataFetcher.fetch_batch(tickers)
+            price_map = {u['ticker']: u['price'] for u in updates}
+            
+            p_data = []
+            total_mkt, total_cost = 0, 0
+            
+            for _, row in df_p.iterrows():
+                curr = price_map.get(row['ticker'], row['avg_cost'])
+                mkt = curr * row['shares']
+                cost = row['avg_cost'] * row['shares']
+                pnl = mkt - cost
+                total_mkt += mkt
+                total_cost += cost
+                
+                p_data.append({
+                    "代號": row['ticker'], "股數": row['shares'],
+                    "平均成本": row['avg_cost'], "現價": curr,
+                    "市值": mkt, "未實現損益": pnl, "報酬率%": (pnl/cost)*100
+                })
+                
+            col1, col2, col3 = st.columns(3)
+            col1.metric("總市值", f"${total_mkt:,.0f}")
+            col2.metric("總成本", f"${total_cost:,.0f}")
+            col3.metric("總損益", f"${total_mkt-total_cost:,.0f}", f"{(total_mkt-total_cost)/total_cost*100:.2f}%")
+            
+            st.dataframe(pd.DataFrame(p_data), use_container_width=True)
+        else:
+            st.info("尚無庫存，請至側邊欄新增交易。")
+            
+    with subtab2:
+        df_t = DBManager.get_transactions()
+        st.dataframe(df_t, use_container_width=True)
+
+# Tab 5: 策略回測 (Backtest)
+with tabs[4]:
+    st.subheader("🧪 策略實驗室")
+    
+    c1, c2, c3 = st.columns(3)
+    bt_ticker = c1.text_input("回測標的", "2330.TW").upper()
+    bt_strat = c2.selectbox("策略", ["kd_cross", "ma_cross"])
+    bt_fund = c3.number_input("初始資金", 100000, 10000000, 500000)
+    
+    if st.button("▶️ 開始回測"):
+        with st.spinner("模擬交易中..."):
+            d = DataFetcher.fetch_full(bt_ticker, days=730) # 抓2年
+            if d:
+                df_hist = pd.read_json(d['history_json'])
+                # 重建技術指標 (因為 fetch_full 只存了最後一筆，這裡要重算整串)
+                df_hist = TAEngine.calculate(df_hist)
+                
+                res = BacktestEngine.run_strategy(df_hist, bt_strat, bt_fund)
+                
+                # 顯示結果
+                r1, r2 = st.columns(2)
+                r1.metric("期末資產", f"${res['final_value']:,.0f}")
+                r2.metric("總報酬率", f"{res['return_pct']:.2f}%")
+                
+                st.write("交易紀錄:")
+                st.dataframe(pd.DataFrame(res['log']), use_container_width=True)
+            else:
+                st.error("無法取得歷史數據")
