@@ -1,9 +1,9 @@
 """
-Willie's Omega V17.0 - The Ultimate Quant System
+Willie's Omega V17.1 - The Ultimate Quant System (Robust Edition)
 Author: Gemini AI
 Description:
-    Merges V15.1 (Deep Analytics, Visuals, Backtest) with V16 (XAI, Expanded Universe, Multi-Factor).
-    Features:
+    Fixes KeyError issues when screener returns empty results.
+    Includes full V17 features:
     1. QuantBrain XAI (Thesis Generation)
     2. Monte Carlo Simulation (Scipy)
     3. Technical Pattern Recognition (Ichimoku, ATR, OBV)
@@ -33,7 +33,7 @@ from scipy.stats import norm
 # 0. 全局設定與 CSS 視覺系統
 # ==========================================
 st.set_page_config(
-    page_title="Willie's Omega V17",
+    page_title="Willie's Omega V17.1",
     layout="wide",
     page_icon="🌌",
     initial_sidebar_state="expanded"
@@ -576,8 +576,15 @@ def plot_monte_carlo(d):
 # ==========================================
 with st.sidebar:
     st.title("🌌 Willie's Omega")
-    st.caption("V17.0 | 終極完全體")
-    st.info("融合 V15.1 強大運算與 V16 白箱 AI")
+    st.caption("V17.1 | 終極完全體")
+    
+    st.info("""
+    融合 V15.1 強大運算與 V16 白箱 AI
+    
+    修復內容：
+    ✅ 掃描結果為空時不再崩潰
+    ✅ 加入空值防護盾
+    """)
     
     with st.expander("⚡ 閃電下單"):
         c1, c2 = st.columns([2, 1])
@@ -607,7 +614,7 @@ with tabs[0]:
             if d: st.metric(t.replace("=F","").replace("^",""), f"{d['price']:,.2f}", f"{d['change_pct']:.2f}%")
             else: st.metric(t, "Loading...")
 
-# Tab 2: V16 的篩選器
+# Tab 2: V16 的篩選器 (關鍵修復區)
 with tabs[1]:
     st.subheader("🎯 AI 因子選股")
     with st.expander("設定策略", expanded=True):
@@ -615,11 +622,13 @@ with tabs[1]:
         strat = c1.selectbox("AI 個性", ["balanced", "value", "growth"])
         univ = c2.selectbox("範圍", ["list_tech", "list_finance", "list_shipping", "list_etf", "list_raw"])
         min_s = c3.slider("最低分", 0, 90, 60)
+        
         if st.button("🚀 啟動 Willie 引擎"):
             conn = sqlite3.connect(DB_NAME)
             c = conn.cursor()
             c.execute("SELECT value FROM system_config WHERE key=?", (univ,))
-            targets = c.fetchone()[0].split(",")
+            res = c.fetchone()
+            targets = res[0].split(",") if res else []
             conn.close()
             
             pb = st.progress(0, "分析中...")
@@ -636,7 +645,14 @@ with tabs[1]:
                         "現價": r['price'], "PE": f"{f['pe']:.1f}", "ROE": f"{f['roe']*100:.1f}%",
                         "AI論述": QuantBrain.explain(f, s)
                     })
-            st.dataframe(pd.DataFrame(rows).sort_values("AI評分", ascending=False), use_container_width=True)
+            
+            # 【關鍵修復】檢查 rows 是否為空
+            if rows:
+                df_res = pd.DataFrame(rows)
+                st.dataframe(df_res.sort_values("AI評分", ascending=False), use_container_width=True)
+                st.success(f"找到 {len(rows)} 檔符合條件的標的！")
+            else:
+                st.warning("⚠️ 掃描完成，但沒有股票符合您設定的條件 (例如分數過高)。請嘗試降低標準或切換策略。")
 
 # Tab 3: V15.1 + V16 深度戰情
 with tabs[2]:
@@ -653,7 +669,7 @@ with tabs[2]:
         m3.metric("殖利", f"{d['factors']['yield']:.1f}%")
         m4.metric("夏普", f"{d['risk']['sharpe']:.2f}")
         m5.metric("波動", f"{d['risk']['volatility']*100:.1f}%")
-        m6.metric("ATR", f"{d['factors'].get('atr',0):.1f}" if 'atr' in d['factors'] else "-") # Fix key error potential
+        m6.metric("ATR", f"{d['factors'].get('atr',0):.1f}" if 'atr' in d['factors'] else "-") 
         
         c_ai, c_radar = st.columns([2, 1])
         with c_ai:
