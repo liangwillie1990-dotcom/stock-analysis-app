@@ -1,16 +1,14 @@
 """
-Willie's Omega V19.0 - Nuclear Fix Edition
+Willie's Omega V19.1 - SSL Bypass Edition
 Author: Gemini AI
 Description:
-    1. Forced synchronous execution for Deep Analysis (Fixes freezing).
-    2. Added st.exception() to expose hidden errors.
-    3. Optimized Twstock fallback to be dynamic (last 120 days).
-    4. Removed hardcoded dates that caused data fetch failures.
+    1. Implements 'verify=False' to bypass TWSE SSL certificate errors on Cloud.
+    2. Replaced 'twstock' library dependency with direct raw API calls for stability.
+    3. Retains full V17 features (AI, Monte Carlo, Backtest).
 """
 
 import streamlit as st
 import yfinance as yf
-import twstock
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -22,15 +20,19 @@ import json
 import threading
 import concurrent.futures
 import requests
+import warnings
 from datetime import datetime, timedelta
 from scipy.stats import norm
 from fake_useragent import UserAgent
+
+# 忽略 SSL 警告 (這是為了繞過證交所憑證問題)
+warnings.filterwarnings("ignore")
 
 # ==========================================
 # 0. 全局設定
 # ==========================================
 st.set_page_config(
-    page_title="Willie's Omega V19",
+    page_title="Willie's Omega V19.1",
     layout="wide",
     page_icon="🛡️",
     initial_sidebar_state="expanded"
@@ -48,7 +50,7 @@ st.markdown("""
 # ==========================================
 # 1. 資料庫管理層
 # ==========================================
-DB_NAME = "willie_v19.db"
+DB_NAME = "willie_v19_1.db"
 
 class DBManager:
     @staticmethod
@@ -68,11 +70,10 @@ class DBManager:
     @staticmethod
     def _seed_universe():
         universe = {
-            "list_tech": "2330,2454,2303,3034,3035,2379,2317,2382,3231,2357,6669,2356,3037,2345,4938",
-            "list_finance": "2881,2882,2891,2886,2892,2884,2890,5880,2885,2880,2883,2887",
-            "list_shipping": "2603,2609,2615,2618,2610,2637,5608,2606",
-            "list_raw": "1101,1102,1301,1303,2002,2014,1513,1514,1519",
-            "list_etf": "0050,0056,00878,00919,00929,00940,00713"
+            "list_tech": "2330,2454,2303,3034,3035,2317,2382,3231,2357,6669",
+            "list_finance": "2881,2882,2891,2886,2892,2884,2890,5880",
+            "list_shipping": "2603,2609,2615,2618,2610,2637,5608",
+            "list_etf": "0050,0056,00878,00919,00929,00940"
         }
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
@@ -112,11 +113,9 @@ class DBManager:
         fee = int(amount * 0.001425)
         tax = int(amount * 0.003) if trans_type == 'SELL' else 0
         total = amount + fee if trans_type == 'BUY' else amount - fee - tax
-        
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         c.execute("INSERT INTO transactions (date, ticker, type, price, shares, amount, fee, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (date, ticker, trans_type, price, shares, total, fee+tax, "Manual"))
-        
         c.execute("SELECT avg_cost, shares FROM portfolio WHERE ticker=?", (ticker,))
         row = c.fetchone()
         if trans_type == 'BUY':
@@ -182,10 +181,9 @@ class TechnicalEngine:
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
         
-        df['BB_Mid'] = df['MA20']
         std = df['Close'].rolling(20).std()
-        df['BB_Up'] = df['BB_Mid'] + (std * 2)
-        df['BB_Low'] = df['BB_Mid'] - (std * 2)
+        df['BB_Up'] = df['MA20'] + (std * 2)
+        df['BB_Low'] = df['MA20'] - (std * 2)
         
         df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
         return df
@@ -229,7 +227,7 @@ class QuantBrain:
     @staticmethod
     def explain(f, score):
         if not f: return "N/A"
-        pros = []
+        pros, cons = [], []
         if f['roe'] and f['roe'] > 0.15: pros.append(f"ROE佳({f['roe']*100:.1f}%)")
         if f['pe'] < 15: pros.append(f"低估值({f['pe']:.1f}x)")
         if f['price'] > f['ma60']: pros.append("多頭排列")
@@ -237,7 +235,7 @@ class QuantBrain:
         return " | ".join(pros) if pros else "觀望"
 
 # ==========================================
-# 3. 數據抓取層 (Stability Rewrite)
+# 3. 數據抓取層 (SSL Bypass Fix)
 # ==========================================
 class DataFetcher:
     @staticmethod
@@ -246,49 +244,55 @@ class DataFetcher:
         return t + ".TW" if t.isdigit() else t
 
     @staticmethod
-    def _get_twstock_history(ticker):
-        """V19 核心：動態抓取證交所數據，不再使用寫死年份"""
-        if not ticker[:2].isdigit(): return pd.DataFrame()
+    def _fetch_twse_raw_manual(ticker_id):
+        """
+        V19.1 核心：不使用 twstock 套件，改用 requests 直連並關閉 SSL 驗證
+        """
         try:
-            sid = ticker.replace(".TW", "")
-            stock = twstock.Stock(sid)
-            # 抓取最近 120 天 (4個月)
-            # Twstock 的 fetch_31 會抓最近 31 天，我們連續抓幾次來拼湊
-            # 為了穩定，先只抓最近 31 天確保圖表能跑
-            raw = stock.fetch_31()
+            # 抓當月
+            date_str = datetime.now().strftime('%Y%m01')
+            url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={date_str}&stockNo={ticker_id}"
             
-            if not raw: return pd.DataFrame()
+            # verify=False 是解決 SSL Error 的關鍵
+            r = requests.get(url, verify=False, timeout=5)
+            data = r.json()
             
-            data = {
-                'Date': [r.date for r in raw],
-                'Open': [r.open for r in raw],
-                'High': [r.high for r in raw],
-                'Low': [r.low for r in raw],
-                'Close': [r.close for r in raw],
-                'Volume': [r.capacity for r in raw] # 注意: capacity 是股數
-            }
-            df = pd.DataFrame(data)
+            if data['stat'] != 'OK': return pd.DataFrame()
+            
+            # 解析 TWSE 的奇怪格式
+            raw_data = data['data']
+            col_names = ['Date', 'Volume', 'Amount', 'Open', 'High', 'Low', 'Close', 'Change', 'Trans']
+            df = pd.DataFrame(raw_data, columns=col_names)
+            
+            # 民國年轉西元
+            def convert_date(d_str):
+                y, m, d = d_str.split('/')
+                return f"{int(y)+1911}-{m}-{d}"
+                
+            df['Date'] = df['Date'].apply(convert_date)
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
-            for c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce')
+            
+            # 處理數字 (移除逗號)
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                df[col] = df[col].astype(str).str.replace(',', '').astype(float)
+                
+            # 股數轉張數 (Volume)
+            df['Volume'] = df['Volume'] / 1000
+            
             return df
         except Exception as e:
-            st.error(f"Twstock Fallback Error: {e}")
+            # print(f"Raw fetch error: {e}")
             return pd.DataFrame()
 
     @staticmethod
     def fetch_full(ticker):
-        # 為了 Debug，不讀快取
-        # cached = DBManager.get_cache(ticker)
-        # if cached: return cached
-        
         ticker = DataFetcher.normalize(ticker)
         data = {"ticker": ticker, "status": "init"}
         hist = pd.DataFrame()
         info = {}
         
-        # 1. 嘗試 Yahoo (加入偽裝)
+        # 1. 嘗試 Yahoo (優先)
         try:
             ua = UserAgent()
             session = requests.Session()
@@ -298,21 +302,23 @@ class DataFetcher:
             if not hist.empty:
                 info = stock.info
                 data['status'] = "yahoo"
-        except Exception as e:
-            print(f"Yahoo Error: {e}")
+        except: pass
 
-        # 2. 失敗則用 Twstock
-        if hist.empty:
-            hist = DataFetcher._get_twstock_history(ticker)
-            if not hist.empty: data['status'] = "twstock"
+        # 2. 失敗則用 手動抓取 (SSL Bypass)
+        if hist.empty and ticker[:2].isdigit():
+            sid = ticker.replace(".TW", "")
+            hist = DataFetcher._fetch_twse_raw_manual(sid)
+            if not hist.empty: data['status'] = "twse_raw"
             
         if hist.empty:
-            st.error(f"❌ 無法抓取 {ticker} 的歷史數據 (Yahoo & Twstock 皆失敗)")
+            st.error(f"❌ 數據源皆失效，無法分析 {ticker}")
             return None
 
         # 3. 補即時價
         try:
             if ticker[:2].isdigit():
+                # 這裡 twstock realtime 可能也會 SSL 報錯，做保護
+                import twstock
                 real = twstock.realtime.get(ticker.replace(".TW", ""))
                 if real['success']:
                     data['price'] = float(real['realtime']['latest_trade_price'])
@@ -326,17 +332,26 @@ class DataFetcher:
         # 運算
         try:
             hist = TechnicalEngine.calculate_all(hist)
+            risk = RiskEngine.calculate_metrics(hist)
+            mc = RiskEngine.monte_carlo(hist)
+            
             factors = QuantBrain.analyze(ticker, hist, info, data['price'])
             score = QuantBrain.score(factors)
             thesis = QuantBrain.explain(factors, score)
             
+            valuation = {}
+            eps = factors.get('eps')
+            if eps:
+                pe_s = hist['Close'] / eps
+                valuation = {"cheap": eps*pe_s.min(), "fair": eps*pe_s.mean(), "expensive": eps*pe_s.max()}
+
             data.update({
                 "change_pct": (data['price'] - hist['Close'].iloc[-2])/hist['Close'].iloc[-2]*100,
                 "volume": hist['Volume'].iloc[-1],
                 "factors": factors, "score": score, "thesis": thesis,
+                "risk": risk, "monte_carlo": mc, "valuation": valuation,
                 "hist_json": hist.reset_index().to_json(date_format='iso')
             })
-            DBManager.save_cache(ticker, data)
             return data
         except Exception as e:
             st.error(f"運算錯誤 ({ticker}): {e}")
@@ -352,6 +367,23 @@ class DataFetcher:
                 return {"ticker": ticker, "price": hist['Close'].iloc[-1], "change_pct": 0}
         except: pass
         return None
+
+    @staticmethod
+    def fetch_batch_full(tickers, prog=None):
+        res = []
+        # 改回單線程以確保穩定 (cloud concurrency issue)
+        total = len(tickers)
+        for i, t in enumerate(tickers):
+            if prog: prog.progress((i+1)/total)
+            r = DataFetcher.fetch_full(t)
+            if r: res.append(r)
+            time.sleep(0.1) # 溫柔一點
+        return res
+
+    @staticmethod
+    def fetch_batch_simple(tickers):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as exe:
+            return list(filter(None, exe.map(DataFetcher.fetch_simple, tickers)))
 
 # ==========================================
 # 4. UI 視覺化
@@ -378,8 +410,8 @@ def plot_chart(d):
 # 5. 主程式
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ Willie's Omega V19")
-    st.info("Yahoo 核心修復版")
+    st.title("🛡️ Willie's Omega V19.1")
+    st.info("SSL Bypass & Raw Fetch Mode")
     if st.button("清除快取重試"):
         st.cache_data.clear()
         st.rerun()
@@ -397,15 +429,13 @@ with tabs[0]:
             else: st.metric(t, "N/A")
 
 with tabs[1]:
-    st.subheader("🔎 個股深度分析 (同步執行模式)")
+    st.subheader("🔎 個股深度分析 (直連模式)")
     target = st.text_input("輸入代號", "2330.TW").upper()
     
     if st.button("開始深度分析"):
-        with st.spinner("正在連線 Yahoo 與 證交所資料庫..."):
+        with st.spinner("正在連線 Yahoo 與 證交所(SSL Bypass)..."):
             try:
-                # 這裡不使用並行，避免 race condition
                 d = DataFetcher.fetch_full(target)
-                
                 if d:
                     st.success(f"數據來源: {d.get('status', 'unknown')}")
                     m1, m2, m3, m4 = st.columns(4)
@@ -418,7 +448,7 @@ with tabs[1]:
                     plot_chart(d)
                 
             except Exception as e:
-                st.error("發生未預期的錯誤，請截圖給開發者:")
+                st.error("發生未預期的錯誤:")
                 st.exception(e)
 
 with tabs[2]:
