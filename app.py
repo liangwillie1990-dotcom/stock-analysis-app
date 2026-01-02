@@ -91,6 +91,7 @@ class DataCore:
         # 1. 抓取數據
         try:
             stock = yf.Ticker(ticker)
+            # 嘗試抓取，如果 Yahoo 擋 IP，這裡可能會回傳空 DataFrame
             hist = stock.history(period="1y")
         except Exception as e:
             st.error(f"連線失敗: {e}")
@@ -102,26 +103,35 @@ class DataCore:
         
         # 檢查必要欄位是否存在 (這就是 V20 報錯的原因)
         required_cols = ['Close', 'High', 'Low', 'Open', 'Volume']
-        if not all(col in hist.columns for col in required_cols):
-            st.warning(f"數據源異常，{ticker} 缺少必要欄位。")
+        # 有些情況下 Volume 會丟失，我們至少要 Close
+        if 'Close' not in hist.columns:
+            st.warning(f"數據源異常，{ticker} 缺少收盤價欄位。")
             return None
 
         # 3. 補即時價 (Twstock 作為輔助，不強求)
         current_price = hist['Close'].iloc[-1]
         try:
             if ticker[:2].isdigit():
+                # 這裡只抓 realtime，不抓 history，因為 history 容易 SSL 報錯
                 real = twstock.realtime.get(ticker.replace(".TW", ""))
                 if real['success']:
                     current_price = float(real['realtime']['latest_trade_price'])
         except: pass
 
         # 4. 整理回傳包
+        # 確保有足夠數據算漲跌幅
+        if len(hist) > 2:
+            prev_close = hist['Close'].iloc[-2]
+            change_pct = (current_price - prev_close) / prev_close * 100
+        else:
+            change_pct = 0.0
+
         return {
             "ticker": ticker,
             "price": current_price,
             "hist": hist,
             "info": stock.info,
-            "change_pct": (current_price - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2] * 100
+            "change_pct": change_pct
         }
 
 # ==========================================
@@ -163,9 +173,9 @@ def ai_score(df, info):
         curr = df.iloc[-1]
         
         # 技術面
-        if curr['Close'] > curr['MA20']: score += 10
-        if curr['Close'] > curr['MA60']: score += 10
-        if curr['K'] > curr['D']: score += 5
+        if 'MA20' in curr and curr['Close'] > curr['MA20']: score += 10
+        if 'MA60' in curr and curr['Close'] > curr['MA60']: score += 10
+        if 'K' in curr and curr['K'] > curr['D']: score += 5
         
         # 基本面 (防呆)
         pe = info.get('trailingPE')
@@ -223,8 +233,14 @@ with tabs[0]:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("現價", f"{data['price']}", f"{data['change_pct']:.2f}%")
         m2.metric("PE (本益比)", f"{data['info'].get('trailingPE', 'N/A')}")
-        m3.metric("KD (K/D)", f"{df['K'].iloc[-1]:.1f} / {df['D'].iloc[-1]:.1f}")
-        m4.metric("MACD", f"{df['Hist'].iloc[-1]:.2f}")
+        
+        # 安全顯示 KD/MACD
+        k_val = f"{df['K'].iloc[-1]:.1f}" if 'K' in df.columns else "-"
+        d_val = f"{df['D'].iloc[-1]:.1f}" if 'D' in df.columns else "-"
+        m3.metric("KD (K/D)", f"{k_val} / {d_val}")
+        
+        macd_val = f"{df['Hist'].iloc[-1]:.2f}" if 'Hist' in df.columns else "-"
+        m4.metric("MACD", macd_val)
         
         # 繪圖
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
@@ -235,13 +251,14 @@ with tabs[0]:
         if 'MA60' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='blue'), name='MA60'), row=1, col=1)
         
         # 量
-        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量'), row=2, col=1)
+        if 'Volume' in df.columns:
+            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量'), row=2, col=1)
         
         fig.update_layout(height=500, template='plotly_dark', xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.warning(f"找不到 {target} 的資料，或是資料來源暫時無法連線。")
+        st.warning(f"找不到 {target} 的資料，或是 Yahoo Finance 暫時封鎖了連線。請稍後再試。")
 
 # --- Tab 2: 庫存 ---
 with tabs[1]:
