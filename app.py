@@ -1,19 +1,19 @@
 import streamlit as st
 import yfinance as yf
+import twstock
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 import sqlite3
 import time
 import json
 from datetime import datetime, timedelta
 
 # --- 設定網頁配置 ---
-st.set_page_config(page_title="Joymax 旗艦戰情室 V8.1", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Joymax 戰情室 V9 (混合引擎版)", layout="wide", page_icon="🚀")
 
 # ==========================================
-# 1. 資料庫層 (SQLite)
+# 1. 資料庫層 (維持 V8 不變)
 # ==========================================
 DB_NAME = "joymax_invest.db"
 
@@ -27,44 +27,31 @@ def init_db():
                      (ticker TEXT PRIMARY KEY, cost REAL, shares INTEGER)''')
         conn.commit()
         conn.close()
-    except Exception as e:
-        st.error(f"資料庫初始化失敗: {e}")
+    except: pass
 
-def get_cached_stock(ticker, ttl_minutes=60):
+def get_cached_stock(ticker, ttl_minutes=30):
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         c.execute("SELECT data, updated_at FROM stock_cache WHERE ticker=?", (ticker,))
         row = c.fetchone()
         conn.close()
-        
         if row:
             data_str, updated_at_str = row
-            updated_at = datetime.fromisoformat(updated_at_str)
-            if datetime.now() - updated_at < timedelta(minutes=ttl_minutes):
+            if datetime.now() - datetime.fromisoformat(updated_at_str) < timedelta(minutes=ttl_minutes):
                 return json.loads(data_str)
-    except:
-        pass
+    except: pass
     return None
 
 def save_to_cache(ticker, data_dict):
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        data_str = json.dumps(data_dict)
         c.execute("REPLACE INTO stock_cache (ticker, data, updated_at) VALUES (?, ?, ?)", 
-                  (ticker, data_str, datetime.now().isoformat()))
+                  (ticker, json.dumps(data_dict), datetime.now().isoformat()))
         conn.commit()
         conn.close()
-    except:
-        pass
-
-def add_portfolio(ticker, cost, shares):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("REPLACE INTO portfolio (ticker, cost, shares) VALUES (?, ?, ?)", (ticker, cost, shares))
-    conn.commit()
-    conn.close()
+    except: pass
 
 def get_portfolio():
     try:
@@ -72,8 +59,14 @@ def get_portfolio():
         df = pd.read_sql("SELECT * FROM portfolio", conn)
         conn.close()
         return df
-    except:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
+
+def add_portfolio(ticker, cost, shares):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("REPLACE INTO portfolio (ticker, cost, shares) VALUES (?, ?, ?)", (ticker, cost, shares))
+    conn.commit()
+    conn.close()
 
 def delete_portfolio(ticker):
     conn = sqlite3.connect(DB_NAME)
@@ -85,268 +78,204 @@ def delete_portfolio(ticker):
 init_db()
 
 # ==========================================
-# 2. 技術指標計算引擎
-# ==========================================
-def calculate_ta(df):
-    try:
-        # KD 指標
-        low_min = df['Low'].rolling(9).min()
-        high_max = df['High'].rolling(9).max()
-        df['RSV'] = (df['Close'] - low_min) / (high_max - low_min) * 100
-        df['K'] = df['RSV'].ewm(com=2).mean()
-        df['D'] = df['K'].ewm(com=2).mean()
-        
-        # MACD
-        exp12 = df['Close'].ewm(span=12, adjust=False).mean()
-        exp26 = df['Close'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = exp12 - exp26
-        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        
-        # RSI
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-    except:
-        # 如果計算失敗，填入預設值
-        df['K'] = 50
-        df['D'] = 50
-        df['MACD'] = 0
-        df['Signal'] = 0
-        df['RSI'] = 50
-    return df
-
-# ==========================================
-# 3. 核心數據抓取 (V8.1 強固版)
+# 2. 混合式抓取引擎 (核心升級)
 # ==========================================
 def fetch_stock_data(ticker, use_cache=True):
     ticker = ticker.strip().upper()
-    # 自動補 .TW (針對數字代號)
-    if ticker.isdigit(): ticker += ".TW"
+    # 判斷是否為台股 (數字開頭)
+    is_tw_stock = ticker[:2].isdigit()
     
+    # 修正代號格式
+    if is_tw_stock and not (ticker.endswith(".TW") or ticker.endswith(".TWO")):
+        yahoo_ticker = ticker + ".TW" # Yahoo 需要 .TW
+    else:
+        yahoo_ticker = ticker
+
+    # 1. 嘗試讀快取
     if use_cache:
-        cached = get_cached_stock(ticker)
+        cached = get_cached_stock(yahoo_ticker)
         if cached: return cached
 
+    data = {}
+    
+    # === 引擎 A: Twstock (專門抓台股即時價，防阻擋) ===
+    if is_tw_stock:
+        try:
+            stock_id = ticker.replace(".TW", "").replace(".TWO", "")
+            # 從台灣證交所抓即時資料
+            real = twstock.realtime.get(stock_id)
+            if real['success']:
+                current_price = float(real['realtime']['latest_trade_price'])
+                # 計算漲跌幅 (Twstock 沒直接給漲跌幅，要自己算)
+                # 開盤價或昨日收盤價可能會在不同欄位，這裡簡化處理
+                # 如果沒有昨日收盤，我們還是得依賴 Yahoo 補足
+                data['price'] = current_price
+                data['name'] = real['info']['name']
+        except:
+            pass # 如果 twstock 失敗，往下走 Yahoo
+
+    # === 引擎 B: Yahoo Finance (補足歷史線圖與美股) ===
     try:
-        stock = yf.Ticker(ticker)
-        # 縮短抓取範圍以加快速度
+        stock = yf.Ticker(yahoo_ticker)
         hist = stock.history(period="6mo")
         
-        if hist.empty:
-            # 再次嘗試不加 .TW (針對美股或指數)
-            stock = yf.Ticker(ticker.replace(".TW", ""))
-            hist = stock.history(period="6mo")
-            if hist.empty: return None
+        if hist.empty: return None
 
+        # 如果剛剛 Twstock 沒抓到價格，就用 Yahoo 的
+        if 'price' not in data:
+            data['price'] = hist['Close'].iloc[-1]
+            
         # 計算技術指標
-        hist = calculate_ta(hist)
+        close = hist['Close']
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
         
-        # 基礎數據 (絕對不會失敗的部分)
-        current = hist['Close'].iloc[-1]
+        # KD
+        low_min = hist['Low'].rolling(9).min()
+        high_max = hist['High'].rolling(9).max()
+        rsv = (close - low_min) / (high_max - low_min) * 100
+        k = rsv.ewm(com=2).mean()
+        d = k.ewm(com=2).mean()
+
+        # 漲跌幅
         prev = hist['Close'].iloc[-2]
-        change_pct = (current - prev) / prev * 100
-        volume = hist['Volume'].iloc[-1] if 'Volume' in hist.columns else 0
-        
-        # 進階數據 (info 容易失敗，需獨立處理)
-        info = {}
+        change_pct = (data['price'] - prev) / prev * 100
+
+        # 基本面 (Yahoo 容易擋，這裡做容錯)
+        pe = None
+        yield_val = 0
+        eps = None
         try:
             info = stock.info
-        except:
-            pass # 抓不到 info 就跳過，不要讓整個程式崩潰
+            eps = info.get('trailingEps')
+            if eps: pe = data['price'] / eps
+            yield_val = info.get('dividendYield', 0) * 100
+            if 'name' not in data: data['name'] = info.get('longName', ticker)
+        except: pass
 
-        eps = info.get('trailingEps') or info.get('forwardEps')
-        pe = None
-        if eps:
-            pe = current / eps
-        
-        # 容錯處理：若 info 裡沒名字，就用代號
-        name = info.get('longName', ticker)
-        
-        data = {
-            "price": current,
+        # 整合數據
+        data.update({
             "change_pct": change_pct,
-            "volume": volume,
-            "eps": eps,
+            "volume": hist['Volume'].iloc[-1],
             "pe": pe,
-            "yield": info.get('dividendYield', 0) * 100 if info.get('dividendYield') else 0,
-            "ma20": hist['Close'].rolling(20).mean().iloc[-1] if len(hist)>20 else current,
-            "ma60": hist['Close'].rolling(60).mean().iloc[-1] if len(hist)>60 else current,
-            "k": hist['K'].iloc[-1],
-            "d": hist['D'].iloc[-1],
-            "macd": hist['MACD'].iloc[-1],
-            "macd_sig": hist['Signal'].iloc[-1],
-            "rsi": hist['RSI'].iloc[-1],
-            "history_close": hist['Close'].to_json(),
-            "name": name
-        }
+            "eps": eps,
+            "yield": yield_val,
+            "k": k.iloc[-1],
+            "d": d.iloc[-1],
+            "rsi": rsi.iloc[-1],
+            "ma20": close.rolling(20).mean().iloc[-1],
+            "history_close": hist['Close'].to_json() # 存圖表數據
+        })
         
-        save_to_cache(ticker, data)
+        # 寫入快取
+        save_to_cache(yahoo_ticker, data)
         return data
 
     except Exception as e:
-        # 如果真的發生不可預期的錯誤，印出來除錯，但不崩潰
-        print(f"Fetch Error {ticker}: {e}")
+        print(f"Error fetching {ticker}: {e}")
         return None
 
 # ==========================================
-# 4. AI 解盤引擎
+# 3. AI 報告生成
 # ==========================================
 def generate_ai_report(ticker, d):
-    date_str = datetime.now().strftime("%Y/%m/%d")
+    ta = []
+    if d['k'] > d['d']: ta.append("KD金叉")
+    else: ta.append("KD死叉")
+    if d['rsi'] > 80: ta.append("RSI過熱")
+    elif d['rsi'] < 20: ta.append("RSI超賣")
     
-    ta_signal = []
-    if d['k'] > d['d']: ta_signal.append("KD黃金交叉(偏多)")
-    else: ta_signal.append("KD死亡交叉(偏空)")
-    if d['rsi'] > 70: ta_signal.append("RSI過熱")
-    elif d['rsi'] < 30: ta_signal.append("RSI超賣")
-    if not ta_signal: ta_signal.append("技術面盤整")
-    
-    ta_str = "、".join(ta_signal)
-    yield_str = f"{d['yield']:.2f}%" if d['yield'] > 0 else "N/A"
-    pe_str = f"{d['pe']:.1f}倍" if d['pe'] else "N/A"
-    
-    full_text = f"""
-【Joymax 智能投顧】{d['name']} ({ticker})
-📅 {date_str} | 💰 收盤：{d['price']:.1f} ({d['change_pct']:+.2f}%)
-📊 殖利率：{yield_str} | 本益比：{pe_str}
-
-🤖 AI 解析：
-1. 技術面：{ta_str}。
-2. 趨勢：股價{"站上" if d['price'] > d['ma20'] else "跌破"}月線。
-3. 建議：{"技術面轉強，可留意佈局點" if d['change_pct']>0 else "短線修正，建議觀察支撐"}。
-    """
-    return full_text.strip()
+    return f"""
+【Joymax 混合引擎報告】{d.get('name', ticker)}
+💰 收盤：{d['price']:.1f} ({d['change_pct']:+.2f}%)
+📊 訊號：{', '.join(ta)}
+🤖 建議：股價{"站上" if d['price']>d['ma20'] else "跌破"}月線，{"多頭格局" if d['change_pct']>0 else "短線偏弱"}。
+    """.strip()
 
 # ==========================================
-# 5. UI 介面
+# 4. UI 介面
 # ==========================================
 with st.sidebar:
-    st.title("Joymax V8.1 強固版")
-    page = st.radio("前往頁面", ["📊 戰情儀表板", "💰 我的庫存管理", "🚀 戰術掃描"])
-    st.markdown("---")
-    
-    if page == "💰 我的庫存管理":
-        st.subheader("新增持股")
-        p_ticker = st.text_input("代號", "2330").upper()
-        p_cost = st.number_input("成本", value=1000.0)
-        p_shares = st.number_input("股數", value=1000, step=100)
-        if st.button("💾 儲存"):
-            if not p_ticker.endswith("TW"): p_ticker += ".TW"
-            add_portfolio(p_ticker, p_cost, p_shares)
-            st.success("已儲存")
-            time.sleep(0.5)
+    st.title("Joymax V9 混合引擎")
+    page = st.radio("功能選單", ["📊 戰情儀表板", "💰 庫存管理", "🚀 戰術掃描"])
+    st.info("💡 V9 更新：台股改用證交所直連，解決 N/A 問題。")
+
+    if page == "💰 庫存管理":
+        st.subheader("新增庫存")
+        t = st.text_input("代號", "2330")
+        c = st.number_input("成本", value=1000.0)
+        s = st.number_input("股數", value=1000)
+        if st.button("儲存"):
+            add_portfolio(t, c, s)
             st.rerun()
 
 if page == "📊 戰情儀表板":
     st.title("📊 市場總覽")
     
-    # 指數區塊 (這裡最容易卡住，V8.1 已做容錯)
+    # 指數 (這部分還是得用 Yahoo，因為證交所沒給費半)
     cols = st.columns(4)
-    # 註：美股指數代號不需 .TW，程式會自動判斷
     indices = {"^TWII": "加權指數", "^TWOII": "櫃買指數", "^SOX": "費半指數", "^IXIC": "那斯達克"}
-    
-    for i, (k, v) in enumerate(indices.items()):
+    for k, v in indices.items():
         with cols[i]:
             d = fetch_stock_data(k)
-            if d: 
-                st.metric(v, f"{d['price']:,.0f}", f"{d['change_pct']:.2f}%")
-            else: 
-                st.metric(v, "N/A", "無資料")
+            if d: st.metric(v, f"{d['price']:,.0f}", f"{d['change_pct']:.2f}%")
+            else: st.metric(v, "N/A")
 
     st.divider()
     
-    # 個股深度分析
-    col_input, col_btn = st.columns([3, 1])
-    ticker = col_input.text_input("輸入個股代號", "2330.TW").upper()
-    if col_btn.button("🔍 分析"):
-        d = fetch_stock_data(ticker, use_cache=False)
+    # 個股 (台股會優先用 Twstock)
+    ticker = st.text_input("輸入個股代號", "2330").upper()
+    if st.button("深度分析"):
+        d = fetch_stock_data(ticker, use_cache=False) # 強制刷新
     else:
         d = fetch_stock_data(ticker)
 
     if d:
-        st.subheader(f"📌 {d['name']} ({ticker})")
-        
+        st.subheader(f"📌 {d.get('name', ticker)}")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("現價", f"{d['price']}", f"{d['change_pct']:.2f}%")
         c2.metric("KD", f"{d['k']:.0f}/{d['d']:.0f}")
         c3.metric("RSI", f"{d['rsi']:.1f}")
         c4.metric("殖利率", f"{d['yield']:.2f}%")
         
-        with st.expander("🤖 AI 報告 (點擊展開)", expanded=True):
-            st.code(generate_ai_report(ticker, d), language="text")
-            
-        hist_series = pd.read_json(d['history_close'], typ='series')
-        st.line_chart(hist_series)
-    else:
-        st.error(f"無法取得 {ticker} 的資料，請檢查代號是否正確。")
+        st.code(generate_ai_report(ticker, d))
+        st.line_chart(pd.read_json(d['history_close'], typ='series'))
 
-elif page == "💰 我的庫存管理":
-    st.title("💰 庫存管理")
-    df_port = get_portfolio()
-    
-    if not df_port.empty:
-        total_mkt = 0
-        total_cost = 0
-        res_list = []
-        
-        # 顯示進度條
-        bar = st.progress(0, "更新庫存現價中...")
-        for i, row in df_port.iterrows():
-            bar.progress((i+1)/len(df_port))
+elif page == "💰 庫存管理":
+    st.title("💰 我的庫存")
+    df = get_portfolio()
+    if not df.empty:
+        res = []
+        bar = st.progress(0, "更新股價中 (使用 Twstock 證交所源)...")
+        for i, row in df.iterrows():
+            bar.progress((i+1)/len(df))
             d = fetch_stock_data(row['ticker'])
             curr = d['price'] if d else row['cost']
-            
-            mkt = curr * row['shares']
-            cost = row['cost'] * row['shares']
-            pnl = mkt - cost
-            
-            total_mkt += mkt
-            total_cost += cost
-            
-            res_list.append({
-                "代號": row['ticker'], "股數": row['shares'],
-                "成本": row['cost'], "現價": curr,
-                "市值": int(mkt), "損益": int(pnl),
-                "報酬率%": round((pnl/cost)*100, 2)
+            res.append({
+                "代號": row['ticker'], "現價": curr, 
+                "損益": int((curr - row['cost']) * row['shares']),
+                "報酬率%": round((curr - row['cost'])/row['cost']*100, 2)
             })
         bar.empty()
-        
-        c1, c2 = st.columns(2)
-        tot_pnl = total_mkt - total_cost
-        c1.metric("總市值", f"${total_mkt:,.0f}")
-        c2.metric("總損益", f"${tot_pnl:,.0f}", f"{(tot_pnl/total_cost)*100:.2f}%")
-        
-        st.dataframe(pd.DataFrame(res_list), use_container_width=True)
-        
-        del_t = st.selectbox("刪除代號", df_port['ticker'])
-        if st.button("刪除"):
-            delete_portfolio(del_t)
-            st.rerun()
+        st.dataframe(pd.DataFrame(res), use_container_width=True)
     else:
-        st.info("目前無庫存，請從側邊欄新增。")
+        st.info("無庫存資料")
 
 elif page == "🚀 戰術掃描":
-    st.title("🚀 快速掃描")
-    # 內建一個不會太大的清單以免卡住
-    default_list = "2330, 2317, 2454, 2603, 2881, 0050, 0056"
-    user_list = st.text_area("輸入代號 (逗號分隔)", default_list)
-    
-    if st.button("執行掃描"):
-        tickers = [x.strip() for x in user_list.replace("\n", ",").split(",") if x]
+    st.title("🚀 快速掃描 (Twstock 加速)")
+    default = "2330, 2317, 2603, 3231, 0050"
+    user = st.text_area("代號列表", default)
+    if st.button("掃描"):
+        ts = [x.strip() for x in user.split(",")]
         res = []
-        bar = st.progress(0, "掃描中...")
-        
-        for i, t in enumerate(tickers):
-            bar.progress((i+1)/len(tickers))
+        bar = st.progress(0)
+        for i, t in enumerate(ts):
+            bar.progress((i+1)/len(ts))
             d = fetch_stock_data(t)
             if d:
-                res.append({
-                    "代號": t, "名稱": d['name'], "現價": d['price'],
-                    "漲跌%": round(d['change_pct'], 2),
-                    "KD": f"{d['k']:.0f}/{d['d']:.0f}",
-                    "本益比": f"{d['pe']:.1f}" if d['pe'] else "-"
-                })
+                res.append({"代號": t, "現價": d['price'], "漲跌%": f"{d['change_pct']:.2f}"})
         bar.empty()
         st.dataframe(pd.DataFrame(res), use_container_width=True)
