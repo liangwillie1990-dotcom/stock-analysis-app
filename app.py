@@ -2,220 +2,182 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-import time
+import plotly.express as px
 
 # --- 設定網頁配置 ---
-st.set_page_config(page_title="Joymax 操盤手戰情室 V4", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Joymax 台股總覽戰情室 V5", layout="wide", page_icon="📊")
 
-# --- 資料庫：內建股票清單 ---
-LIST_TOP_20 = {
-    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電", 
-    "2303.TW": "聯電", "2881.TW": "富邦金", "2882.TW": "國泰金", "2891.TW": "中信金", 
-    "2002.TW": "中鋼", "1301.TW": "台塑", "2382.TW": "廣達", "2357.TW": "華碩", 
-    "3231.TW": "緯創", "2379.TW": "瑞昱", "3008.TW": "大立光", "2603.TW": "長榮", 
-    "2609.TW": "陽明", "2615.TW": "萬海", "0050.TW": "元大台灣50", "0056.TW": "元大高股息"
+# --- 核心數據定義 ---
+
+# 1. 國際與大盤指數
+INDICES = {
+    "^TWII": "🇹🇼 加權指數 (大盤)",
+    "^TWOII": "🇹🇼 櫃買指數 (中小型)",
+    "^SOX": "🇺🇸 費半指數 (半導體)",
+    "^IXIC": "🇺🇸那斯達克 (科技)",
+    "^GSPC": "🇺🇸 S&P 500",
 }
 
-# 台灣 50 成分股 (示意，可視需要擴充)
-LIST_TW50 = [
-    "2330.TW", "2454.TW", "2317.TW", "2308.TW", "2303.TW", "2881.TW", "2882.TW", "2382.TW", "2891.TW", "2886.TW",
-    "2412.TW", "3008.TW", "1301.TW", "2884.TW", "2892.TW", "2885.TW", "3034.TW", "3037.TW", "2357.TW", "2890.TW",
-    "3231.TW", "3045.TW", "1303.TW", "2379.TW", "2880.TW", "2883.TW", "2887.TW", "5880.TW", "2912.TW", "2002.TW",
-    "5871.TW", "2345.TW", "2395.TW", "4904.TW", "2327.TW", "3711.TW", "4938.TW", "1101.TW", "2408.TW", "2603.TW",
-    "2801.TW", "6669.TW", "3017.TW", "2353.TW", "1326.TW", "2207.TW", "3035.TW", "5876.TW", "1216.TW", "2609.TW"
-]
+# 2. 產業代表性龍頭 (用龍頭股漲跌代表該產業資金流向)
+SECTORS = {
+    "半導體": "2330.TW",   # 台積電
+    "代工組裝": "2317.TW", # 鴻海
+    "IC設計": "2454.TW",   # 聯發科
+    "航運": "2603.TW",     # 長榮
+    "金融": "2881.TW",     # 富邦金
+    "塑化": "1301.TW",     # 台塑
+    "鋼鐵": "2002.TW",     # 中鋼
+    "AI伺服器": "2382.TW", # 廣達
+    "重電綠能": "1519.TW", # 華城
+    "營建": "2501.TW",     # 國建
+}
 
-# --- 輔助函式：轉換 Dataframe 為 CSV ---
-def convert_df(df):
-    return df.to_csv(index=False).encode('utf-8-sig')
-
-# --- 輔助函式：批量掃描 ---
-def scan_market(ticker_list, scan_limit=None):
-    data_list = []
-    
-    # 如果清單太長，為了避免當機，我們可以限制數量
-    target_tickers = ticker_list[:scan_limit] if scan_limit else ticker_list
-    
-    progress_text = f"正在掃描 {len(target_tickers)} 檔股票 (每檔間隔 0.2 秒以防阻擋)..."
-    my_bar = st.progress(0, text=progress_text)
-    
-    total = len(target_tickers)
-    
-    for i, ticker in enumerate(target_tickers):
-        ticker = ticker.strip().upper()
-        if not ticker: continue
+# --- 輔助函式 ---
+def get_stock_data(ticker):
+    """快速抓取單一股票/指數的最新數據與均線"""
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="6mo") # 抓半年以計算均線
         
-        # 自動補上 .TW (如果使用者忘記打)
-        if not ticker.endswith(".TW") and not ticker.endswith(".TWO"):
-            ticker += ".TW"
-
-        my_bar.progress((i + 1) / total, text=f"正在分析 ({i+1}/{total}): {ticker} ...")
+        if hist.empty: return None
         
-        try:
-            time.sleep(0.2) # 防阻擋延遲
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="1y")
-            
-            if hist.empty:
-                continue
+        close = hist['Close'].iloc[-1]
+        prev_close = hist['Close'].iloc[-2]
+        change_pct = (close - prev_close) / prev_close * 100
+        
+        # 計算均線 (月線20MA, 季線60MA)
+        ma20 = hist['Close'].rolling(20).mean().iloc[-1]
+        ma60 = hist['Close'].rolling(60).mean().iloc[-1]
+        
+        # 判斷多空趨勢
+        trend = "盤整"
+        if close > ma20 and close > ma60: trend = "🔥 強多格局"
+        elif close < ma20 and close < ma60: trend = "❄️ 空頭弱勢"
+        elif close > ma20: trend = "📈 短多支撐"
+        elif close < ma20: trend = "📉 短線轉弱"
 
-            current_close = hist['Close'].iloc[-1]
-            prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_close
-            volume = hist['Volume'].iloc[-1]
-            pct_change = (current_close - prev_close) / prev_close
-            
-            # 抓取基本面
-            eps = None
-            try:
-                info = stock.info
-                eps = info.get('trailingEps') or info.get('forwardEps')
-                name = info.get('longName', ticker)
-            except:
-                name = ticker
+        return {
+            "price": close,
+            "change": change_pct,
+            "ma20": ma20,
+            "trend": trend
+        }
+    except:
+        return None
 
-            # 本益比與目標價
-            pe_ratio = 999
-            target_str_fair = "N/A"
-            target_str_cheap = "N/A"
-            target_str_exp = "N/A"
+# --- 主程式 ---
 
-            if eps and eps > 0:
-                pe_ratio = current_close / eps
-                # 簡單計算目標價
-                implied_pe = hist['Close'] / eps
-                t_cheap = eps * implied_pe.min()
-                t_fair = eps * implied_pe.mean()
-                t_exp = eps * implied_pe.max()
-                
-                target_str_cheap = f"{t_cheap:.1f}"
-                target_str_fair = f"{t_fair:.1f}"
-                target_str_exp = f"{t_exp:.1f}"
-            
-            # 針對 ETF 的處理
-            if "00" in ticker[:2]:
-                target_str_fair = "ETF"
-
-            data_list.append({
-                "代號": ticker,
-                "名稱": name,
-                "現價": round(current_close, 1),
-                "漲跌幅%": round(pct_change * 100, 2),
-                "成交量": volume,
-                "本益比": round(pe_ratio, 1) if pe_ratio != 999 else "N/A",
-                "保守價": target_str_cheap,
-                "合理價": target_str_fair,
-                "樂觀價": target_str_exp,
-            })
-            
-        except Exception:
-            continue
-            
-    my_bar.empty()
-    return pd.DataFrame(data_list)
-
-# --- 主介面 ---
-st.title("📈 Joymax 操盤手戰情室 V4.0 (全台股擴充版)")
+st.title("📊 Joymax 台股總覽戰情室 V5.0")
+st.caption("由上而下 (Top-Down) 觀察：國際股市 -> 台股大盤 -> 產業流向")
 st.markdown("---")
 
-# --- 側邊欄：掃描設定 ---
-with st.sidebar:
-    st.header("1. 設定掃描範圍")
-    
-    scan_source = st.radio(
-        "選擇股票池來源：",
-        ("🔥 精選 20 檔 (速度快)", "🏆 台灣 50 成分股 (約 30秒)", "📝 自訂/貼上清單")
-    )
-    
-    target_list = []
-    
-    if scan_source == "🔥 精選 20 檔 (速度快)":
-        target_list = list(LIST_TOP_20.keys())
-        st.caption(f"掃描數量：{len(target_list)} 檔")
-        
-    elif scan_source == "🏆 台灣 50 成分股 (約 30秒)":
-        target_list = LIST_TW50
-        st.caption(f"掃描數量：{len(target_list)} 檔")
-        
-    elif scan_source == "📝 自訂/貼上清單":
-        st.info("請輸入股票代號，用逗號或換行分隔 (例如：2330, 2317, 2603)")
-        user_input = st.text_area("輸入代號區", "2330, 2317, 2603")
-        # 處理使用者輸入
-        if user_input:
-            raw_list = user_input.replace("\n", ",").replace(" ", "").split(",")
-            # 過濾空字串並補上 .TW (簡單防呆)
-            target_list = [x for x in raw_list if x]
-            st.caption(f"目前將掃描：{len(target_list)} 檔")
+# ==========================================
+# 區塊 1: 國際與大盤儀表板 (Macro View)
+# ==========================================
+st.subheader("1. 🌍 全球關鍵指數 (多空風向球)")
 
-    st.divider()
-    
-    st.header("2. 執行快篩")
-    # 按鈕區
-    if st.button("🚀 開始掃描分析"):
-        st.session_state['run_scan'] = True
-        
-    st.divider()
-    
-    st.header("3. 個股深度查詢")
-    ticker_input = st.text_input("代號", value="2330.TW").upper()
-    run_single = st.button("個股分析")
+# 建立 5 個欄位顯示指數
+cols = st.columns(5)
 
-# --- 顯示掃描結果 ---
-if st.session_state.get('run_scan'):
-    st.subheader(f"📊 掃描結果：{scan_source}")
-    
-    if len(target_list) > 100:
-        st.warning("⚠️ 您選擇的股票數量較多，請耐心等待 (預計每 10 檔需 3-5 秒)...")
-    
-    df_result = scan_market(target_list)
-    
-    if not df_result.empty:
-        # 顯示互動表格
-        st.dataframe(
-            df_result, 
-            use_container_width=True,
-            column_config={
-                "漲跌幅%": st.column_config.NumberColumn(
-                    "漲跌幅%", format="%.2f %%"
-                )
-            }
-        )
-        
-        # 快捷排序按鈕
-        c1, c2, c3 = st.columns(3)
-        if c1.button("按「成交量」排序"):
-            st.dataframe(df_result.sort_values("成交量", ascending=False).head(10), use_container_width=True)
-        if c2.button("按「本益比」排序 (找便宜)"):
-            # 排除 N/A
-            mask = df_result["本益比"].apply(lambda x: isinstance(x, (int, float)))
-            st.dataframe(df_result[mask].sort_values("本益比").head(10), use_container_width=True)
-        if c3.button("按「漲幅」排序 (找強勢)"):
-            st.dataframe(df_result.sort_values("漲跌幅%", ascending=False).head(10), use_container_width=True)
+# 為了效能，我們一次性顯示，不使用進度條
+for i, (ticker, name) in enumerate(INDICES.items()):
+    data = get_stock_data(ticker)
+    with cols[i]:
+        if data:
+            color = "normal"
+            if data['change'] > 0: color = "off" # Streamlit metric 綠色代表漲需要反過來設定? 不，預設紅漲綠跌需用 delta_color
             
-        # 下載按鈕
-        csv = convert_df(df_result)
-        st.download_button("📥 下載完整 Excel/CSV", csv, "market_scan.csv", "text/csv")
-    else:
-        st.error("無法取得數據，請檢查代號格式 (台股需加 .TW) 或稍後再試。")
+            st.metric(
+                label=name,
+                value=f"{data['price']:,.0f}",
+                delta=f"{data['change']:.2f}%",
+            )
+            st.caption(f"趨勢: {data['trend']}")
+        else:
+            st.metric(label=name, value="N/A")
 
-    # 執行完後重置，避免重複跑
-    st.session_state['run_scan'] = False
+st.info("💡 觀察重點：費半指數 (^SOX) 通常領先連動台股；櫃買指數 (^TWOII) 代表內資與中小型股活躍度。")
+st.markdown("---")
 
-# --- 個股分析 (保持原樣簡化版) ---
-if run_single:
-    st.divider()
-    st.subheader(f"🔎 {ticker_input} 快速分析")
-    try:
-        stock = yf.Ticker(ticker_input)
-        info = stock.info
-        hist = stock.history(period="1y")
-        curr = hist['Close'].iloc[-1]
-        eps = info.get('trailingEps')
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("現價", f"{curr:.1f}")
-        c2.metric("EPS", f"{eps}" if eps else "N/A")
-        c3.metric("本益比", f"{curr/eps:.1f}" if eps else "N/A")
-        
-        st.line_chart(hist['Close'])
-    except Exception as e:
-        st.error(f"查無資料: {e}")
+# ==========================================
+# 區塊 2: 產業資金流向 (Sector Heatmap)
+# ==========================================
+st.subheader("2. 🏭 產業資金流向 (類股龍頭漲跌)")
+
+# 掃描產業龍頭
+sector_data = []
+for sector_name, ticker in SECTORS.items():
+    data = get_stock_data(ticker)
+    if data:
+        sector_data.append({
+            "產業": sector_name,
+            "龍頭股": ticker,
+            "漲跌幅%": data['change'],
+            "狀態": "上漲" if data['change'] > 0 else "下跌"
+        })
+
+if sector_data:
+    df_sector = pd.DataFrame(sector_data)
+    
+    # 使用 Plotly 畫出漂亮的長條圖
+    fig = px.bar(
+        df_sector, 
+        x='產業', 
+        y='漲跌幅%', 
+        color='漲跌幅%',
+        color_continuous_scale=['green', 'white', 'red'], # 綠跌紅漲
+        range_color=[-3, 3], # 設定顏色區間 -3% 到 +3%
+        title="今日各產業強弱勢一覽 (紅強綠弱)",
+        text_auto='.2f'
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 文字快評
+    top_sector = df_sector.loc[df_sector['漲跌幅%'].idxmax()]
+    low_sector = df_sector.loc[df_sector['漲跌幅%'].idxmin()]
+    st.success(f"🔥 今日最強族群：**{top_sector['產業']}** (漲幅 {top_sector['漲跌幅%']:.2f}%)")
+    st.error(f"❄️ 今日最弱族群：**{low_sector['產業']}** (漲幅 {low_sector['漲跌幅%']:.2f}%)")
+
+st.markdown("---")
+
+# ==========================================
+# 區塊 3: 個股詳細查詢 (保留 V4 功能)
+# ==========================================
+st.subheader("3. 🔍 個股深度分析")
+
+col1, col2 = st.columns([1, 3])
+with col1:
+    ticker_input = st.text_input("輸入個股代號", value="2330.TW").upper()
+    if st.button("開始分析"):
+        st.session_state['run_stock'] = True
+
+with col2:
+    if st.session_state.get('run_stock'):
+        try:
+            stock = yf.Ticker(ticker_input)
+            hist = stock.history(period="1y")
+            info = stock.info
+            
+            if not hist.empty:
+                current = hist['Close'].iloc[-1]
+                eps = info.get('trailingEps') or info.get('forwardEps')
+                
+                # 簡單計算目標價
+                if eps:
+                    pe = current / eps
+                    pe_band = hist['Close'] / eps
+                    target_fair = eps * pe_band.mean()
+                    upside = (target_fair - current) / current
+                    
+                    st.write(f"**{ticker_input} 分析結果**")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("現價", f"{current:.1f}")
+                    c2.metric("本益比", f"{pe:.1f}x")
+                    c3.metric("合理目標價", f"{target_fair:.1f}", delta=f"{upside:.2%}")
+                    
+                    st.line_chart(hist['Close'])
+                else:
+                    st.warning("無 EPS 數據，僅顯示股價。")
+                    st.line_chart(hist['Close'])
+        except Exception as e:
+            st.error(f"查詢失敗: {e}")
