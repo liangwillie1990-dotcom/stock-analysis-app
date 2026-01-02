@@ -5,3 +5,4 @@ plotly
 twstock
 lxml
 requests
+scipy
