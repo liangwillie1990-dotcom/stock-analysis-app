@@ -1,10 +1,10 @@
 """
-Willie's Alpha V15.0 - Institutional Grade Quant System
+Willie's Alpha V15.1 - Institutional Grade Quant System (Fixed Dependencies)
 Author: Gemini AI
 Description:
     An advanced stock analysis platform featuring:
     1. AI Scoring System (0-100)
-    2. Monte Carlo Simulation for Risk Analysis
+    2. Monte Carlo Simulation for Risk Analysis (Requires scipy)
     3. Technical Pattern Recognition
     4. Portfolio & Ledger Management
     5. Hybrid Data Fetching (Twstock + Yahoo)
@@ -25,13 +25,15 @@ import threading
 import concurrent.futures
 import random
 from datetime import datetime, timedelta
+
+# 科學運算模組 (本次錯誤修正的關鍵)
 from scipy.stats import norm
 
 # ==========================================
 # 0. 全局設定與 CSS 視覺系統 (Visual System)
 # ==========================================
 st.set_page_config(
-    page_title="Willie's Alpha V15",
+    page_title="Willie's Alpha V15.1",
     layout="wide",
     page_icon="🦅",
     initial_sidebar_state="expanded"
@@ -368,7 +370,7 @@ class PatternEngine:
         return signals
 
 class RiskEngine:
-    """風險計算與蒙地卡羅模擬"""
+    """風險計算與蒙地卡羅模擬 (使用 scipy)"""
     @staticmethod
     def calculate_sharpe(df, risk_free_rate=0.015):
         if len(df) < 30: return 0, 0
@@ -701,7 +703,7 @@ def render_pro_chart(d):
 # --- 側邊欄 ---
 with st.sidebar:
     st.title("🦅 Willie's Alpha")
-    st.caption("V15.0 量化決策旗艦版")
+    st.caption("V15.1 量化決策旗艦版")
     
     # 快速交易小工具
     with st.expander("⚡ 閃電下單 (Ledger)", expanded=True):
