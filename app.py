@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timedelta
 
 # --- 設定網頁配置 ---
-st.set_page_config(page_title="willie 旗艦戰情室 V8", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Joymax 旗艦戰情室 V8", layout="wide", page_icon="🚀")
 
 # ==========================================
 # 1. 資料庫層 (SQLite) - 核心升級
