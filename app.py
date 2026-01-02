@@ -10,10 +10,10 @@ import json
 from datetime import datetime, timedelta
 
 # --- 設定網頁配置 ---
-st.set_page_config(page_title="Joymax 戰情室 V9 (混合引擎版)", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Joymax 戰情室 V9.1", layout="wide", page_icon="🚀")
 
 # ==========================================
-# 1. 資料庫層 (維持 V8 不變)
+# 1. 資料庫層
 # ==========================================
 DB_NAME = "joymax_invest.db"
 
@@ -78,54 +78,45 @@ def delete_portfolio(ticker):
 init_db()
 
 # ==========================================
-# 2. 混合式抓取引擎 (核心升級)
+# 2. 混合式抓取引擎 (修正 lxml 依賴)
 # ==========================================
 def fetch_stock_data(ticker, use_cache=True):
     ticker = ticker.strip().upper()
-    # 判斷是否為台股 (數字開頭)
     is_tw_stock = ticker[:2].isdigit()
     
-    # 修正代號格式
     if is_tw_stock and not (ticker.endswith(".TW") or ticker.endswith(".TWO")):
-        yahoo_ticker = ticker + ".TW" # Yahoo 需要 .TW
+        yahoo_ticker = ticker + ".TW"
     else:
         yahoo_ticker = ticker
 
-    # 1. 嘗試讀快取
     if use_cache:
         cached = get_cached_stock(yahoo_ticker)
         if cached: return cached
 
     data = {}
     
-    # === 引擎 A: Twstock (專門抓台股即時價，防阻擋) ===
+    # === 引擎 A: Twstock ===
     if is_tw_stock:
         try:
             stock_id = ticker.replace(".TW", "").replace(".TWO", "")
-            # 從台灣證交所抓即時資料
             real = twstock.realtime.get(stock_id)
             if real['success']:
                 current_price = float(real['realtime']['latest_trade_price'])
-                # 計算漲跌幅 (Twstock 沒直接給漲跌幅，要自己算)
-                # 開盤價或昨日收盤價可能會在不同欄位，這裡簡化處理
-                # 如果沒有昨日收盤，我們還是得依賴 Yahoo 補足
                 data['price'] = current_price
                 data['name'] = real['info']['name']
         except:
-            pass # 如果 twstock 失敗，往下走 Yahoo
+            pass 
 
-    # === 引擎 B: Yahoo Finance (補足歷史線圖與美股) ===
+    # === 引擎 B: Yahoo Finance ===
     try:
         stock = yf.Ticker(yahoo_ticker)
         hist = stock.history(period="6mo")
         
         if hist.empty: return None
 
-        # 如果剛剛 Twstock 沒抓到價格，就用 Yahoo 的
         if 'price' not in data:
             data['price'] = hist['Close'].iloc[-1]
             
-        # 計算技術指標
         close = hist['Close']
         delta = close.diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
@@ -133,18 +124,15 @@ def fetch_stock_data(ticker, use_cache=True):
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         
-        # KD
         low_min = hist['Low'].rolling(9).min()
         high_max = hist['High'].rolling(9).max()
         rsv = (close - low_min) / (high_max - low_min) * 100
         k = rsv.ewm(com=2).mean()
         d = k.ewm(com=2).mean()
 
-        # 漲跌幅
         prev = hist['Close'].iloc[-2]
         change_pct = (data['price'] - prev) / prev * 100
 
-        # 基本面 (Yahoo 容易擋，這裡做容錯)
         pe = None
         yield_val = 0
         eps = None
@@ -156,7 +144,6 @@ def fetch_stock_data(ticker, use_cache=True):
             if 'name' not in data: data['name'] = info.get('longName', ticker)
         except: pass
 
-        # 整合數據
         data.update({
             "change_pct": change_pct,
             "volume": hist['Volume'].iloc[-1],
@@ -167,10 +154,9 @@ def fetch_stock_data(ticker, use_cache=True):
             "d": d.iloc[-1],
             "rsi": rsi.iloc[-1],
             "ma20": close.rolling(20).mean().iloc[-1],
-            "history_close": hist['Close'].to_json() # 存圖表數據
+            "history_close": hist['Close'].to_json()
         })
         
-        # 寫入快取
         save_to_cache(yahoo_ticker, data)
         return data
 
@@ -179,7 +165,7 @@ def fetch_stock_data(ticker, use_cache=True):
         return None
 
 # ==========================================
-# 3. AI 報告生成
+# 3. AI 報告
 # ==========================================
 def generate_ai_report(ticker, d):
     ta = []
@@ -199,9 +185,9 @@ def generate_ai_report(ticker, d):
 # 4. UI 介面
 # ==========================================
 with st.sidebar:
-    st.title("Joymax V9 混合引擎")
+    st.title("Joymax V9.1 混合引擎")
     page = st.radio("功能選單", ["📊 戰情儀表板", "💰 庫存管理", "🚀 戰術掃描"])
-    st.info("💡 V9 更新：台股改用證交所直連，解決 N/A 問題。")
+    st.info("💡 V9.1：修正大盤迴圈錯誤，補上 lxml 依賴。")
 
     if page == "💰 庫存管理":
         st.subheader("新增庫存")
@@ -215,10 +201,11 @@ with st.sidebar:
 if page == "📊 戰情儀表板":
     st.title("📊 市場總覽")
     
-    # 指數 (這部分還是得用 Yahoo，因為證交所沒給費半)
     cols = st.columns(4)
     indices = {"^TWII": "加權指數", "^TWOII": "櫃買指數", "^SOX": "費半指數", "^IXIC": "那斯達克"}
-    for k, v in indices.items():
+    
+    # 這裡修復了 V9 的迴圈錯誤
+    for i, (k, v) in enumerate(indices.items()):
         with cols[i]:
             d = fetch_stock_data(k)
             if d: st.metric(v, f"{d['price']:,.0f}", f"{d['change_pct']:.2f}%")
@@ -226,10 +213,9 @@ if page == "📊 戰情儀表板":
 
     st.divider()
     
-    # 個股 (台股會優先用 Twstock)
     ticker = st.text_input("輸入個股代號", "2330").upper()
     if st.button("深度分析"):
-        d = fetch_stock_data(ticker, use_cache=False) # 強制刷新
+        d = fetch_stock_data(ticker, use_cache=False)
     else:
         d = fetch_stock_data(ticker)
 
@@ -249,7 +235,7 @@ elif page == "💰 庫存管理":
     df = get_portfolio()
     if not df.empty:
         res = []
-        bar = st.progress(0, "更新股價中 (使用 Twstock 證交所源)...")
+        bar = st.progress(0, "更新股價中...")
         for i, row in df.iterrows():
             bar.progress((i+1)/len(df))
             d = fetch_stock_data(row['ticker'])
@@ -265,7 +251,7 @@ elif page == "💰 庫存管理":
         st.info("無庫存資料")
 
 elif page == "🚀 戰術掃描":
-    st.title("🚀 快速掃描 (Twstock 加速)")
+    st.title("🚀 快速掃描")
     default = "2330, 2317, 2603, 3231, 0050"
     user = st.text_area("代號列表", default)
     if st.button("掃描"):
