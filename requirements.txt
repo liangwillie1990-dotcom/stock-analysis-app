@@ -3,3 +3,7 @@ yfinance>=0.2.50
 pandas
 plotly
 twstock
+lxml
+requests
+scipy
+fake-useragent
