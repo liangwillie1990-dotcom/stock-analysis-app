@@ -5,5 +5,3 @@ plotly
 twstock
 lxml
 requests
-scipy
-fake-useragent
