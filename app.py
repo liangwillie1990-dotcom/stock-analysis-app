@@ -1,7 +1,7 @@
 """
-Joymax 戰情室 V10 (Classic Restored)
-Version: V10.1 (Patched for 2025 stability)
-Feature: Hybrid Engine (Twstock + Yahoo), PE Valuation, Portfolio Management
+Joymax 戰情室 V10.2 (Final Fix)
+Version: V10.2
+Fix: Handled NoneType error for PE ratio formatting.
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Joymax 戰情室 V10", layout="wide", page_icon="📈")
 
 # ==========================================
-# 1. 資料庫層 (快取核心)
+# 1. 資料庫層
 # ==========================================
 DB_NAME = "joymax_v10.db"
 
@@ -84,26 +84,24 @@ def delete_portfolio(ticker):
 init_db()
 
 # ==========================================
-# 2. 雙引擎抓取邏輯 (V10 核心)
+# 2. 雙引擎抓取邏輯
 # ==========================================
 def fetch_stock_data(ticker, use_cache=True):
     ticker = ticker.strip().upper()
     is_tw_stock = ticker[:2].isdigit()
     
-    # 格式修正
     if is_tw_stock and not (ticker.endswith(".TW") or ticker.endswith(".TWO")):
         yahoo_ticker = ticker + ".TW"
     else:
         yahoo_ticker = ticker
 
-    # 1. 優先查快取
     if use_cache:
         cached = get_cached_stock(yahoo_ticker)
         if cached: return cached
 
     data = {}
     
-    # === 步驟 A: Twstock (即時股價) ===
+    # A. Twstock
     if is_tw_stock:
         try:
             stock_id = ticker.replace(".TW", "").replace(".TWO", "")
@@ -113,19 +111,18 @@ def fetch_stock_data(ticker, use_cache=True):
                 data['name'] = real['info']['name']
         except: pass
 
-    # === 步驟 B: Yahoo Finance (歷史與EPS) ===
+    # B. Yahoo
     try:
         stock = yf.Ticker(yahoo_ticker)
         hist = stock.history(period="6mo")
         
         if hist.empty: return None
 
-        # 補價
         if 'price' not in data:
             data['price'] = hist['Close'].iloc[-1]
             
-        # 技術指標
         close = hist['Close']
+        # 簡單計算 KD, RSI
         delta = close.diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -141,11 +138,9 @@ def fetch_stock_data(ticker, use_cache=True):
         prev = hist['Close'].iloc[-2]
         change_pct = (data['price'] - prev) / prev * 100
 
-        # 基本面 (EPS)
         pe = None
         eps = None
         yield_val = 0
-        
         try:
             info = stock.info
             eps = info.get('trailingEps') or info.get('forwardEps')
@@ -154,18 +149,13 @@ def fetch_stock_data(ticker, use_cache=True):
             if 'name' not in data: data['name'] = info.get('longName', ticker)
         except: pass
 
-        # 本益比估價 (V10 特色)
         valuation = {}
         if eps and not hist.empty:
             pe_series = hist['Close'] / eps
-            pe_min = pe_series.min()
-            pe_mean = pe_series.mean()
-            pe_max = pe_series.max()
-            
             valuation = {
-                "cheap": eps * pe_min,
-                "fair": eps * pe_mean,
-                "expensive": eps * pe_max
+                "cheap": eps * pe_series.min(),
+                "fair": eps * pe_series.mean(),
+                "expensive": eps * pe_series.max()
             }
 
         data.update({
@@ -192,7 +182,7 @@ def fetch_stock_data(ticker, use_cache=True):
         return None
 
 # ==========================================
-# 3. AI 報告
+# 3. AI 報告 (修復重點)
 # ==========================================
 def generate_ai_report(ticker, d):
     ta = []
@@ -202,7 +192,10 @@ def generate_ai_report(ticker, d):
     elif d['rsi'] < 20: ta.append("RSI超賣")
     
     val_str = "N/A"
+    pe_str = "N/A"  # 預設值
+    
     if d['pe']:
+        pe_str = f"{d['pe']:.1f}" # 只有在有值的時候才轉格式
         if d['pe'] < 15: val_str = "低估"
         elif d['pe'] < 20: val_str = "合理"
         else: val_str = "偏高"
@@ -211,7 +204,7 @@ def generate_ai_report(ticker, d):
 【Joymax 智能日報】{d.get('name', ticker)}
 💰 收盤：{d['price']:.1f} ({d['change_pct']:+.2f}%)
 📊 技術：{', '.join(ta)} | RSI: {d['rsi']:.1f}
-💎 估值：PE {d['pe']:.1f}倍 ({val_str})
+💎 估值：PE {pe_str}倍 ({val_str})
 目標價參考：保守 {d['valuation'].get('cheap', 0):.1f} / 合理 {d['valuation'].get('fair', 0):.1f}
     """.strip()
 
@@ -219,9 +212,9 @@ def generate_ai_report(ticker, d):
 # 4. UI 介面
 # ==========================================
 with st.sidebar:
-    st.title("Joymax V10 經典版")
+    st.title("Joymax V10.2 修復版")
     page = st.radio("功能選單", ["📊 戰情儀表板", "🚀 戰術掃描", "💰 庫存管理"])
-    st.info("已恢復至 V10 穩定架構")
+    st.success("系統狀態：已修復文字格式錯誤")
     
     if page == "💰 庫存管理":
         st.subheader("新增庫存")
@@ -232,11 +225,9 @@ with st.sidebar:
             add_portfolio(t, c, s)
             st.rerun()
 
-# --- 頁面 1: 戰情儀表板 ---
 if page == "📊 戰情儀表板":
     st.title("📊 市場總覽與個股分析")
     
-    # 指數
     cols = st.columns(4)
     indices = {"^TWII": "加權指數", "^TWOII": "櫃買指數", "^SOX": "費半指數", "^IXIC": "那斯達克"}
     for i, (k, v) in enumerate(indices.items()):
@@ -246,7 +237,6 @@ if page == "📊 戰情儀表板":
             else: st.metric(v, "N/A")
     st.divider()
     
-    # 個股
     col_input, col_btn = st.columns([3, 1])
     ticker = col_input.text_input("輸入個股代號", "2330.TW").upper()
     
@@ -258,9 +248,12 @@ if page == "📊 戰情儀表板":
     if d:
         st.subheader(f"📌 {d.get('name', ticker)}")
         
+        # 這裡也加強防護
+        pe_display = f"{d['pe']:.1f}x" if d['pe'] else "N/A"
+        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("現價", f"{d['price']}", f"{d['change_pct']:.2f}%")
-        c2.metric("本益比", f"{d['pe']:.1f}x" if d['pe'] else "N/A")
+        c2.metric("本益比", pe_display)
         c3.metric("KD", f"{d['k']:.0f}/{d['d']:.0f}")
         c4.metric("殖利率", f"{d['yield']:.2f}%")
 
@@ -272,7 +265,6 @@ if page == "📊 戰情儀表板":
             v2.metric("平均 (合理價)", f"{val['fair']:.1f}", f"{val['fair']-d['price']:.1f}")
             v3.metric("樂觀 (昂貴價)", f"{val['expensive']:.1f}", f"{val['expensive']-d['price']:.1f}")
             
-            # 位階圖
             fig = go.Figure()
             curr = d['price']
             fig.add_trace(go.Scatter(x=[curr], y=[0], mode='markers+text', text=["現價"], marker=dict(size=15, color='black')))
@@ -285,10 +277,8 @@ if page == "📊 戰情儀表板":
         st.code(generate_ai_report(ticker, d))
         st.line_chart(pd.read_json(d['history_close'], typ='series'))
 
-# --- 頁面 2: 戰術掃描 ---
 elif page == "🚀 戰術掃描":
     st.title("🚀 市場雷達")
-    st.write("快速篩選：")
     col_b1, col_b2, col_b3, col_b4 = st.columns(4)
     scan_mode = None
     
@@ -310,10 +300,11 @@ elif page == "🚀 戰術掃描":
             d = fetch_stock_data(t)
             if d:
                 dist_low = (d['price'] - d['low_52']) / d['low_52'] * 100
+                pe_disp = f"{d['pe']:.1f}" if d['pe'] else "-"
                 res.append({
                     "代號": t, "名稱": d.get('name', t), 
                     "現價": d['price'], "漲跌%": round(d['change_pct'], 2),
-                    "成交量": d['volume'], "本益比": f"{d['pe']:.1f}" if d['pe'] else "-",
+                    "成交量": d['volume'], "本益比": pe_disp,
                     "KD": f"{d['k']:.0f}/{d['d']:.0f}",
                     "距低點%": round(dist_low, 1)
                 })
@@ -326,12 +317,10 @@ elif page == "🚀 戰術掃描":
             elif scan_mode == 'weak': df = df.sort_values("漲跌%", ascending=True).head(10)
             elif scan_mode == 'rebound': df = df.sort_values("距低點%", ascending=True).head(10)
             
-            # 使用 st.dataframe 預設設定，避免 V17 報錯
-            st.dataframe(df)
+            st.dataframe(df, use_container_width=True)
         else:
             st.warning("查無資料")
 
-# --- 頁面 3: 庫存管理 ---
 elif page == "💰 庫存管理":
     st.title("💰 我的庫存")
     df_port = get_portfolio()
@@ -363,7 +352,7 @@ elif page == "💰 庫存管理":
         c1.metric("總市值", f"${total_mkt:,.0f}")
         c2.metric("總損益", f"${tot_pnl:,.0f}", f"{(tot_pnl/total_cost)*100:.2f}%")
         
-        st.dataframe(pd.DataFrame(res))
+        st.dataframe(pd.DataFrame(res), use_container_width=True)
         
         d_ticker = st.selectbox("刪除持股", df_port['ticker'])
         if st.button("刪除"):
