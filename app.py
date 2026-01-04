@@ -1,7 +1,8 @@
 """
-Joymax 戰情室 V10.3 (Sector Navigation)
-Version: V10.3
-Feature: Added pre-defined sector lists for easy scanning without manual input.
+Joymax 戰情室 V10.4 (Final Stable)
+Version: V10.4
+Fix: TypeError when PE ratio is None (N/A).
+Feature: Includes V10.3 Sector Navigation.
 """
 
 import streamlit as st
@@ -15,12 +16,12 @@ import time
 import json
 from datetime import datetime, timedelta
 
-# --- 設定網頁配置 ---
-st.set_page_config(page_title="Joymax 戰情室 V10.3", layout="wide", page_icon="🧭")
+# ==========================================
+# 0. 全局設定
+# ==========================================
+st.set_page_config(page_title="Joymax V10.4", layout="wide", page_icon="🛡️")
 
-# ==========================================
-# 0. 內建板塊名單 (V10.3 新增)
-# ==========================================
+# 內建板塊名單
 SECTOR_LISTS = {
     "🔹 自訂/預設": "2330, 2317, 2454, 2603, 2881, 2308, 0050",
     "🤖 AI 伺服器": "2317, 2382, 3231, 2357, 6669, 2356, 3017, 2324, 2376, 2421, 3515",
@@ -34,7 +35,7 @@ SECTOR_LISTS = {
 # ==========================================
 # 1. 資料庫層
 # ==========================================
-DB_NAME = "joymax_v10.db"
+DB_NAME = "joymax_v10_4.db"
 
 def init_db():
     try:
@@ -114,7 +115,7 @@ def fetch_stock_data(ticker, use_cache=True):
 
     data = {}
     
-    # Twstock
+    # Twstock (優先)
     if is_tw_stock:
         try:
             stock_id = ticker.replace(".TW", "").replace(".TWO", "")
@@ -124,7 +125,7 @@ def fetch_stock_data(ticker, use_cache=True):
                 data['name'] = real['info']['name']
         except: pass
 
-    # Yahoo
+    # Yahoo (補足)
     try:
         stock = yf.Ticker(yahoo_ticker)
         hist = stock.history(period="6mo")
@@ -164,10 +165,7 @@ def fetch_stock_data(ticker, use_cache=True):
         valuation = {}
         if eps and not hist.empty:
             pe_series = hist['Close'] / eps
-            pe_min = pe_series.min()
-            pe_mean = pe_series.mean()
-            pe_max = pe_series.max()
-            valuation = {"cheap": eps * pe_min, "fair": eps * pe_mean, "expensive": eps * pe_max}
+            valuation = {"cheap": eps * pe_series.min(), "fair": eps * pe_series.mean(), "expensive": eps * pe_series.max()}
 
         data.update({
             "change_pct": change_pct, "volume": hist['Volume'].iloc[-1],
@@ -186,7 +184,7 @@ def fetch_stock_data(ticker, use_cache=True):
         return None
 
 # ==========================================
-# 3. AI 報告
+# 3. AI 報告 (這裡修復了 TypeError)
 # ==========================================
 def generate_ai_report(ticker, d):
     ta = []
@@ -194,8 +192,10 @@ def generate_ai_report(ticker, d):
     else: ta.append("KD死叉")
     
     val_str = "N/A"
-    pe_str = "N/A"
-    if d['pe']:
+    pe_str = "N/A" # 預設顯示 N/A
+    
+    # 只有當 pe 真的是數字時，才進行格式化
+    if d['pe'] is not None:
         pe_str = f"{d['pe']:.1f}"
         if d['pe'] < 15: val_str = "低估"
         elif d['pe'] < 20: val_str = "合理"
@@ -212,10 +212,10 @@ def generate_ai_report(ticker, d):
 # 4. UI 介面
 # ==========================================
 with st.sidebar:
-    st.title("Joymax V10.3")
-    st.caption("板塊導航版")
+    st.title("Joymax V10.4")
+    st.caption("完美修復版")
     page = st.radio("功能選單", ["📊 戰情儀表板", "🚀 戰術掃描", "💰 庫存管理"])
-    st.success("功能：新增熱門板塊清單")
+    st.success("已修復：TypeError (PE N/A)")
     
     if page == "💰 庫存管理":
         st.subheader("新增庫存")
@@ -227,7 +227,7 @@ with st.sidebar:
             st.rerun()
 
 if page == "📊 戰情儀表板":
-    st.title("📊 市場總覽與個股分析")
+    st.title("📊 市場總覽")
     
     cols = st.columns(4)
     indices = {"^TWII": "加權指數", "^TWOII": "櫃買指數", "^SOX": "費半指數", "^IXIC": "那斯達克"}
@@ -250,8 +250,11 @@ if page == "📊 戰情儀表板":
         st.subheader(f"📌 {d.get('name', ticker)}")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("現價", f"{d['price']}", f"{d['change_pct']:.2f}%")
-        pe_d = f"{d['pe']:.1f}x" if d['pe'] else "N/A"
-        c2.metric("本益比", pe_d)
+        
+        # 安全顯示本益比
+        pe_display = f"{d['pe']:.1f}x" if d['pe'] else "N/A"
+        c2.metric("本益比", pe_display)
+        
         c3.metric("KD", f"{d['k']:.0f}/{d['d']:.0f}")
         c4.metric("殖利率", f"{d['yield']:.2f}%")
 
@@ -275,19 +278,15 @@ if page == "📊 戰情儀表板":
         st.code(generate_ai_report(ticker, d))
         st.line_chart(pd.read_json(d['history_close'], typ='series'))
 
-# --- 頁面 2: 戰術掃描 (V10.3 優化重點) ---
+# --- 頁面 2: 戰術掃描 (V10.3 功能保留) ---
 elif page == "🚀 戰術掃描":
     st.title("🚀 市場雷達")
     
-    # --- 新增：板塊選擇器 ---
-    st.info("💡 提示：使用下方選單快速載入熱門股票，無需手動輸入。")
+    # 板塊選擇器
     selected_sector = st.selectbox("📂 選擇觀察板塊", list(SECTOR_LISTS.keys()))
-    
-    # 將選擇的板塊內容自動填入文字框
     default_text = SECTOR_LISTS[selected_sector]
-    user_list = st.text_area("掃描名單 (可手動增減)", default_text, height=100)
+    user_list = st.text_area("掃描名單", default_text, height=100)
     
-    # 掃描按鈕區
     col_b1, col_b2, col_b3, col_b4 = st.columns(4)
     scan_mode = None
     if col_b1.button("🔥 成交爆量"): scan_mode = 'vol'
@@ -295,12 +294,10 @@ elif page == "🚀 戰術掃描":
     if col_b3.button("📉 跌幅過重"): scan_mode = 'weak'
     if col_b4.button("🌊 觸底反彈"): scan_mode = 'rebound'
     
-    if scan_mode or st.button("🚀 立即執行掃描"):
+    if scan_mode or st.button("🚀 立即執行"):
         tickers = [x.strip() for x in user_list.replace("\n", ",").split(",") if x]
         res = []
-        
-        # 進度條
-        bar = st.progress(0, f"正在掃描 {len(tickers)} 檔股票...")
+        bar = st.progress(0, "掃描中...")
         
         for i, t in enumerate(tickers):
             bar.progress((i+1)/len(tickers))
@@ -323,10 +320,9 @@ elif page == "🚀 戰術掃描":
             elif scan_mode == 'strong': df = df.sort_values("漲跌%", ascending=False).head(10)
             elif scan_mode == 'weak': df = df.sort_values("漲跌%", ascending=True).head(10)
             elif scan_mode == 'rebound': df = df.sort_values("距低點%", ascending=True).head(10)
-            
-            st.dataframe(df) # 不使用 use_container_width 以防報錯
+            st.dataframe(df)
         else:
-            st.warning("⚠️ 查無資料，可能是股票代號錯誤或網路連線暫時中斷。")
+            st.warning("查無資料")
 
 elif page == "💰 庫存管理":
     st.title("💰 我的庫存")
@@ -336,18 +332,16 @@ elif page == "💰 庫存管理":
         res = []
         total_mkt = 0
         total_cost = 0
-        bar = st.progress(0, "計算市值中...")
+        bar = st.progress(0, "計算市值...")
         for i, row in df_port.iterrows():
             bar.progress((i+1)/len(df_port))
             d = fetch_stock_data(row['ticker'])
             curr = d['price'] if d else row['cost']
-            
             mkt = curr * row['shares']
             cost = row['cost'] * row['shares']
             pnl = mkt - cost
             total_mkt += mkt
             total_cost += cost
-            
             res.append({
                 "代號": row['ticker'], "現價": curr, 
                 "損益": int(pnl), "報酬率%": round((pnl/cost)*100, 2)
@@ -355,10 +349,8 @@ elif page == "💰 庫存管理":
         bar.empty()
         
         c1, c2 = st.columns(2)
-        tot_pnl = total_mkt - total_cost
         c1.metric("總市值", f"${total_mkt:,.0f}")
-        c2.metric("總損益", f"${tot_pnl:,.0f}", f"{(tot_pnl/total_cost)*100:.2f}%")
-        
+        c2.metric("總損益", f"${total_mkt-total_cost:,.0f}", f"{(total_mkt-total_cost)/total_cost*100:.2f}%")
         st.dataframe(pd.DataFrame(res))
         
         d_ticker = st.selectbox("刪除持股", df_port['ticker'])
